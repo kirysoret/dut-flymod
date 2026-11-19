@@ -27,7 +27,7 @@ namespace DutFly
     [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.5")]
     public class Plugin : BasePlugin
     {
-        public const string VersionName = "0.2.5.0 Beta";
+        public const string VersionName = "0.2.5.1 Beta";
         internal static ManualLogSource L;
         internal static ConfigFile Cfg;
         public static bool UsedThisSession;
@@ -195,7 +195,6 @@ namespace DutFly
         // estado
         bool _flying, _menuOpen;
         Rigidbody _rb;
-        bool _prevGravity = true;
         float _flipLeft;
         Vector3 _flipAxisLocal;
         Quaternion _flipLevel;
@@ -363,7 +362,6 @@ namespace DutFly
                 if (_trick != 0) EndTrick();
                 _rb = FindLocalBody();
                 if (_rb == null) { Plugin.L.LogWarning("No hay coche local todavia."); return; }
-                _prevGravity = _rb.useGravity;
                 _flying = true;
                 Plugin.MarkUsed("fly");
             }
@@ -372,7 +370,7 @@ namespace DutFly
                 _flying = false;
                 if (_rb != null)
                 {
-                    _rb.useGravity = _prevGravity;
+                    _rb.useGravity = true;
                     _rb.linearVelocity = Vector3.zero;
                     _rb.angularVelocity = Vector3.zero;
                 }
@@ -507,7 +505,7 @@ namespace DutFly
         // La "normal objetivo" se mezcla hacia la pared segun lo cerca que este: el auto se va
         // inclinando poco a poco. La gravedad tira hacia la superficie que pisa en vez de hacia abajo.
         // El giro sobre su propio eje (volante) se conserva.
-        bool _spiderActive, _spiderSurface, _spiderPrevGravity = true;
+        bool _spiderActive, _spiderSurface;
         Vector3 _spiderNormal = Vector3.up;
         float _spiderAir;
 
@@ -538,7 +536,6 @@ namespace DutFly
             if (!_spiderActive)
             {
                 _spiderActive = true;
-                _spiderPrevGravity = _rb.useGravity;
                 _spiderNormal = t.up;
                 Plugin.MarkUsed("modo arana");
             }
@@ -591,7 +588,28 @@ namespace DutFly
         {
             _spiderActive = false;
             _spiderSurface = false;
-            if (_rb != null) _rb.useGravity = _spiderPrevGravity;
+            if (_rb != null) _rb.useGravity = true;
+        }
+
+        // deja el auto de fabrica: multiplicadores x1, gravedad encendida y todos los modos apagados
+        void RestoreCar()
+        {
+            Settings.PowerMult.Value = Settings.SpeedMult.Value = Settings.GripMult.Value = 1f;
+            _txt.Clear();
+            Settings.Spider.Value = false;
+            if (_spiderActive) SpiderRelease();
+            if (_trick != 0) EndTrick();
+            _flipLeft = 0;
+            if (_flying) ToggleFly();
+            var rb = FindLocalBody();
+            if (rb != null)
+            {
+                rb.useGravity = true;
+                rb.angularVelocity = Vector3.zero;
+            }
+            _tuneTimer = 0;   // aplicar los x1 ya
+            Plugin.Cfg.Save();
+            Plugin.L.LogInfo("Auto restaurado a original.");
         }
 
         // ---------- estilo del auto
@@ -1114,6 +1132,12 @@ namespace DutFly
             else SpiderStep();
             if ((_flying || _trick != 0 || _flipLeft > 0 || !Settings.Spider.Value) && _spiderActive) SpiderRelease();
 
+            // red de seguridad: sin ningun modo activo la gravedad siempre esta encendida
+            if (!_flying && _trick == 0 && !_spiderActive && _rb != null)
+            {
+                try { if (!_rb.useGravity) _rb.useGravity = true; } catch { }
+            }
+
             if (!_flying && _trick == 0 && Held(Settings.KeyBoost))
             {
                 if (_rb == null) _rb = FindLocalBody();
@@ -1401,11 +1425,7 @@ namespace DutFly
                     Slider("Fuerza del boost", Settings.BoostAccel, 0, 300, "m/s2");
                     Settings.NoLimiters.Value = Switch("Quitar limitadores del juego", Settings.NoLimiters.Value, null);
                     Hint("Escribe en la caja para pasar del maximo del slider.");
-                    if (Button("Restaurar coche original"))
-                    {
-                        Settings.PowerMult.Value = Settings.SpeedMult.Value = Settings.GripMult.Value = 1f;
-                        _txt.Clear();
-                    }
+                    if (Button("Restaurar auto original")) RestoreCar();
                     break;
                 default:
                     Section("TECLAS");
