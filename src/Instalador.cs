@@ -20,7 +20,8 @@ namespace FlyModInstaller
 {
     static class App
     {
-        public const string UpdateUrl = "https://raw.githubusercontent.com/kirysoret/dut-flymod/main/version.txt";
+        // API de GitHub (sin cache de CDN); la pagina raw muestra el mismo archivo
+        public const string UpdateUrl = "https://api.github.com/repos/kirysoret/dut-flymod/contents/version.txt?ref=main";
         public const string ExeName = "Drive Up Together.exe";
         public const string ProcName = "Drive Up Together";
 
@@ -136,6 +137,7 @@ namespace FlyModInstaller
             var wc = new WebClient();
             wc.Headers[HttpRequestHeader.CacheControl] = "no-cache";
             wc.Headers[HttpRequestHeader.UserAgent] = "FlyModInstaller";
+            wc.Headers[HttpRequestHeader.Accept] = "application/vnd.github.raw";
             return wc;
         }
 
@@ -210,7 +212,7 @@ namespace FlyModInstaller
             Log("Buscando actualizaciones...");
             try
             {
-                string txt = await Task.Run(() => Web().DownloadString(App.UpdateUrl + "?t=" + DateTime.UtcNow.Ticks));
+                string txt = await Task.Run(() => Web().DownloadString(App.UpdateUrl));
                 _remote = ParseKv(txt);
                 string rv;
                 if (!_remote.TryGetValue("version", out rv)) { Log("version.txt remoto invalido."); return; }
