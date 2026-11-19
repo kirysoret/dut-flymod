@@ -1,6 +1,6 @@
-version=0.2.0
-notas=Primera Beta: menu en 8, voltereta solo desde el suelo (ya no sube spameando), boost mas fuerte
-mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/7e219b04518b6f3854cf772f866b8fb43db0a6b0/FlyMod.dll
-mod_sha256=27D580F93A231FCB73C69788B7E3A9FA0E6EA40AEF2392AE0FA3122D2E0592AA
-instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/7e219b04518b6f3854cf772f866b8fb43db0a6b0/FlyModInstaller.exe
-instalador_sha256=DF41DD961CA3E21747F18C53C12543A100CF7AF121B2FE5808D5C09505276012
+version=0.2.1
+notas=Menu nuevo, camara quieta con el menu abierto, voltereta termina horizontal, truco aereo (H) con tiempo estimado
+mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/0ebe2df174637a8d2dc849acdf21cf133d3299a0/FlyMod.dll
+mod_sha256=9D2998DEF133B7F2549A80F60E89DB2A34B4A2DA423892908E7D6A04F63D6C4B
+instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/0ebe2df174637a8d2dc849acdf21cf133d3299a0/FlyModInstaller.exe
+instalador_sha256=C87DD01EC81B4B18A8FEB0855BAD4E33C9C258A934A73D9A7A7FD5434C5C9F25
