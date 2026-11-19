@@ -9,10 +9,17 @@ Mod de BepInEx 6 (IL2CPP) con menú en el juego.
 | G | Voltereta (front flip / back flip), termina horizontal |
 | H | Truco aéreo: sube, da volteretas avanzando y cae horizontal |
 | B | Boost (mantener) |
+| N | Ver al siguiente jugador (espectador) |
 
 Desde el menú se ajustan: velocidad del fly, velocidad/salto/vueltas de la voltereta, altura/distancia/volteretas/velocidad del truco aéreo (con tiempo estimado), potencia del motor, velocidad máxima, tracción y boost (escribiendo en la caja se puede pasar del máximo del slider), y se reasignan todas las teclas (pestaña Teclas: pulsas el botón y luego la tecla nueva).
 
 Con el menú abierto la cámara no se mueve con el mouse.
+
+**TP:** ir a otro jugador, a coordenadas X/Y/Z, o guardar una posición y volver a ella.
+
+**Espectador:** la cámara se pone detrás del coche de otro jugador (mouse para girar, rueda para acercar); si se reinicia, lo sigue.
+
+**Mod de mapas:** agrega el mapa gratis **Infinito (Mod)** a la lista de mapas del juego: piso gris con cuadrícula infinito y nada más. Todos los jugadores de la partida necesitan el mod para jugarlo. En ese mapa nunca se sube puntuación.
 
 **Al usar cualquier truco se bloquean hasta cerrar el juego:** subida al leaderboard, logros/estadísticas de Steam, recompensas de altura y monedas.
 

@@ -14,6 +14,9 @@ using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.Injection;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
+using Il2CppInterop.Runtime.InteropTypes;
+using Caporta.DriveUpTogether.Maps;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using NWH.Common.Cameras;
@@ -21,10 +24,10 @@ using NWH.WheelController3D;
 
 namespace DutFly
 {
-    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.1")]
+    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.3")]
     public class Plugin : BasePlugin
     {
-        public const string VersionName = "0.2.1 Beta";
+        public const string VersionName = "0.2.3 Beta";
         internal static ManualLogSource L;
         internal static ConfigFile Cfg;
         public static bool UsedThisSession;
@@ -63,17 +66,10 @@ namespace DutFly
             PatchAll(h, typeof(Caporta.DriveUpTogether.Gameplay.Surfaces.VehicleLaunchGuard), unlimited, "FixedUpdate");
             PatchAll(h, typeof(Caporta.DriveUpTogether.VehicleSpeedGovernor), unlimited, "Limit");
 
-            // Camara: con el menu abierto, el juego cree que el mouse esta sobre la interfaz
-            try
-            {
-                var getter = AccessTools.PropertyGetter(typeof(CameraMouseDrag), "PointerOverUI");
-                if (getter != null)
-                {
-                    h.Patch(getter, postfix: new HarmonyMethod(typeof(Plugin).GetMethod(nameof(PointerOverUIPostfix), BindingFlags.Static | BindingFlags.NonPublic)));
-                    L.LogInfo("Camara: PointerOverUI parcheado");
-                }
-            }
-            catch (Exception e) { L.LogWarning("No se pudo parchear la camara: " + e.Message); }
+            // La camara se congela desde FlyBehaviour (allowRotation/zoom). No se parchea ningun getter:
+            // en IL2CPP los getters pequenos comparten codigo entre clases y parchear uno los parchea todos.
+
+            MapMod.Patch(h);
 
             L.LogInfo($"FlyMod {VersionName} cargado. {Settings.P(Settings.KeyMenu)} = menu.");
         }
@@ -133,7 +129,7 @@ namespace DutFly
         public static ConfigEntry<bool> NoLimiters;
         public static ConfigEntry<float> WinX, WinY;
 
-        public static ConfigEntry<string> KeyMenu, KeyFly, KeyUp, KeyDown, KeyFast, KeyFlip, KeyTrick, KeyBoost;
+        public static ConfigEntry<string> KeyMenu, KeyFly, KeyUp, KeyDown, KeyFast, KeyFlip, KeyTrick, KeyBoost, KeySpec;
         public static readonly List<(string label, ConfigEntry<string> entry)> Binds = new();
 
         public static void Bind(ConfigFile c)
@@ -164,6 +160,7 @@ namespace DutFly
             KeyFlip = Key(c, "Flip", "G", "Voltereta");
             KeyTrick = Key(c, "TrucoAereo", "H", "Truco aereo");
             KeyBoost = Key(c, "Boost", "B", "Boost (mantener)");
+            KeySpec = Key(c, "Espectar", "N", "Ver siguiente jugador");
         }
 
         // nombre legible de la tecla (Digit8 -> 8)
@@ -192,12 +189,24 @@ namespace DutFly
         Quaternion _flipLevel;
         CursorLockMode _prevLock; bool _prevVisible;
 
-        // truco aereo: 0 nada, 1 subiendo, 2 girando
+        // truco aereo: 0 nada, 1 en el aire girando
         int _trick;
-        Vector3 _trickTarget;
         Quaternion _trickLevel;
-        float _trickAngle;
-        bool _trickGravity;
+        float _trickAngle, _trickTime, _trickMaxTime;
+
+        // TP / espectar / mapa
+        readonly List<(string name, Caporta.DriveUpTogether.Vehicle veh)> _others = new();
+        float _othersTimer;
+        Vector3? _savedPos; Quaternion _savedRot;
+        Caporta.DriveUpTogether.Vehicle _specTarget;
+        string _specName;
+        Camera _specCam;
+        readonly List<Camera> _disabledCams = new();
+        float _specYaw, _specPitch = 15f, _specDist = 9f, _specLost;
+        GameObject _floor;
+        bool _inVoid;
+        Vector3 _voidReturnPos; Quaternion _voidReturnRot;
+        static readonly Vector3 VoidOrigin = new Vector3(20000f, 0f, 20000f);
 
         // camara congelada
         readonly List<(CameraMouseDrag cam, bool rot, float zoom)> _frozenCams = new();
@@ -269,6 +278,12 @@ namespace DutFly
             if (Down(Settings.KeyFly)) ToggleFly();
             if (Down(Settings.KeyFlip)) StartFlip();
             if (Down(Settings.KeyTrick)) StartTrick();
+            if (Down(Settings.KeySpec)) SpectateNext();
+
+            _othersTimer -= Time.unscaledDeltaTime;
+            if (_othersTimer <= 0) { _othersTimer = 1f; RefreshOthers(); }
+
+            MapMod.Tick();
 
             _tuneTimer -= Time.unscaledDeltaTime;
             if (_tuneTimer <= 0) { _tuneTimer = 0.25f; ApplyTuning(); }
@@ -374,18 +389,38 @@ namespace DutFly
             return Quaternion.LookRotation(fwd.normalized, Vector3.up);
         }
 
-        // ---------- truco aereo: sube X metros, gira N vueltas, se pone horizontal y cae
+        // ---------- truco aereo con fisica real:
+        // impulsa el coche hacia arriba (justo para llegar a "Altura") y hacia adelante (para recorrer
+        // "Distancia" en el aire), lo hace girar con velocidad angular y al completar las volteretas
+        // lo pone horizontal y deja que la gravedad lo baje.
+        static float Gravity => Mathf.Max(0.1f, Mathf.Abs(Physics.gravity.y));
+
+        // devuelve (tiempo subiendo, tiempo total en el aire, tiempo de volteretas)
+        public static (float up, float air, float spin) TrickTimes()
+        {
+            float h = Mathf.Max(0.1f, Settings.TrickHeight.Value);
+            float up = Mathf.Sqrt(2f * h / Gravity);
+            float spin = Mathf.Max(0.25f, Settings.TrickTurns.Value) / Mathf.Max(0.1f, Settings.TrickSpin.Value);
+            return (up, up * 2f, spin);
+        }
+
         void StartTrick()
         {
             if (_flying || _trick != 0) return;
             _rb = FindLocalBody();
             if (_rb == null) return;
             _flipLeft = 0;
-            _trickTarget = _rb.position + Vector3.up * Mathf.Max(0f, Settings.TrickHeight.Value);
+            var (up, air, _) = TrickTimes();
             _trickLevel = LevelRotation(_rb);
             _trickAngle = 0;
-            _trickGravity = _rb.useGravity;
-            _rb.useGravity = false;
+            _trickTime = 0;
+            _trickMaxTime = air + 1f;
+
+            // empezar derecho y lanzar
+            _rb.rotation = _trickLevel;
+            _rb.angularVelocity = Vector3.zero;
+            Vector3 fwd = _trickLevel * Vector3.forward;
+            _rb.linearVelocity = Vector3.up * (Gravity * up) + fwd * (Settings.TrickDistance.Value / air);
             _trick = 1;
             Plugin.MarkUsed("truco aereo");
         }
@@ -394,39 +429,400 @@ namespace DutFly
         {
             if (_rb == null) { _trick = 0; return; }
             float dt = Time.fixedDeltaTime;
-            _rb.linearVelocity = Vector3.zero;
-            _rb.angularVelocity = Vector3.zero;
-
-            if (_trick == 1)
-            {
-                // subir y enderezarse a la vez
-                _rb.MovePosition(Vector3.MoveTowards(_rb.position, _trickTarget, Settings.TrickRiseSpeed * dt));
-                _rb.MoveRotation(Quaternion.RotateTowards(_rb.rotation, _trickLevel, 540f * dt));
-                if ((_rb.position - _trickTarget).sqrMagnitude < 0.0025f) { _rb.MoveRotation(_trickLevel); _trick = 2; }
-                return;
-            }
-
-            // volteretas hacia adelante mientras avanza "Distancia" metros
+            _trickTime += dt;
             float total = 360f * Mathf.Max(0.25f, Settings.TrickTurns.Value);
-            _trickAngle = Mathf.Min(total, _trickAngle + 360f * Mathf.Max(0.1f, Settings.TrickSpin.Value) * dt);
-            float progress = _trickAngle / total;
-            Vector3 fwd = _trickLevel * Vector3.forward;
-            _rb.MovePosition(_trickTarget + fwd * (Settings.TrickDistance.Value * progress));
-            _rb.MoveRotation(_trickLevel * Quaternion.AngleAxis(_trickAngle, Vector3.right));
-            if (_trickAngle >= total) EndTrick();
+            float w = 360f * Mathf.Max(0.1f, Settings.TrickSpin.Value);      // grados por segundo
+            _trickAngle += w * dt;
+
+            if (_trickAngle >= total || _trickTime > _trickMaxTime) { EndTrick(); return; }
+            // giro hacia adelante alrededor del eje lateral del coche (fijo en el mundo)
+            _rb.angularVelocity = (_trickLevel * Vector3.right) * (w * Mathf.Deg2Rad);
         }
 
         void EndTrick()
         {
             if (_rb != null)
             {
-                _rb.MoveRotation(_trickLevel);      // horizontal perfecto
-                _rb.rotation = _trickLevel;
-                _rb.linearVelocity = Vector3.zero;
                 _rb.angularVelocity = Vector3.zero;
-                _rb.useGravity = _trickGravity;     // y lo deja caer
+                _rb.rotation = _trickLevel;         // horizontal perfecto
+                _rb.MoveRotation(_trickLevel);      // la velocidad lineal se conserva: cae con la gravedad
             }
             _trick = 0;
+        }
+
+        // ---------- otros jugadores
+        void RefreshOthers()
+        {
+            _others.Clear();
+            try
+            {
+                var mine = LocalVehicle();
+                var all = UnityEngine.Object.FindObjectsByType<Caporta.DriveUpTogether.Vehicle>(FindObjectsSortMode.None);
+                int i = 1;
+                foreach (var v in all)
+                {
+                    if (v == null || (mine != null && v.Pointer == mine.Pointer)) continue;
+                    bool ghost = false;
+                    try { ghost = v.IsGhost != null && v.IsGhost.Value; } catch { }
+                    if (ghost) continue;
+                    string name = null;
+                    try { name = v.DebugDisplayName; } catch { }
+                    if (string.IsNullOrWhiteSpace(name)) name = "Jugador " + i;
+                    _others.Add((name, v));
+                    i++;
+                }
+            }
+            catch (Exception e) { Plugin.L.LogWarning("No se pudo listar jugadores: " + e.Message); }
+        }
+
+        // ---------- teletransporte
+        void TeleportTo(Vector3 pos, Quaternion rot)
+        {
+            var veh = LocalVehicle();
+            var rb = FindLocalBody();
+            if (veh == null || rb == null) return;
+            if (_trick != 0) EndTrick();
+            _flipLeft = 0;
+            try { veh.SetPositionAndRotation(pos, rot); } catch { }
+            rb.position = pos;
+            rb.rotation = rot;
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            Plugin.MarkUsed("tp");
+        }
+
+        void TeleportToVehicle(Caporta.DriveUpTogether.Vehicle target)
+        {
+            if (target == null) return;
+            var t = target.transform;
+            Vector3 fwd = t.forward; fwd.y = 0;
+            if (fwd.sqrMagnitude < 0.001f) fwd = Vector3.forward;
+            var rot = Quaternion.LookRotation(fwd.normalized, Vector3.up);
+            // al lado del otro coche, un poco por encima para no chocar
+            TeleportTo(t.position + rot * Vector3.right * 4f + Vector3.up * 1.5f, rot);
+        }
+
+        void SavePosition()
+        {
+            var rb = FindLocalBody();
+            if (rb == null) return;
+            _savedPos = rb.position;
+            _savedRot = LevelRotation(rb);
+        }
+
+        // ---------- espectar: camara propia detras del coche de otro jugador
+        void EnsureSpecCam()
+        {
+            if (_specCam != null) return;
+            var go = new GameObject("FlyModSpectatorCam");
+            UnityEngine.Object.DontDestroyOnLoad(go);
+            go.hideFlags = HideFlags.HideAndDontSave;
+            _specCam = go.AddComponent<Camera>();
+            _specCam.nearClipPlane = 0.1f;
+            _specCam.farClipPlane = 20000f;
+            _specCam.clearFlags = CameraClearFlags.Skybox;
+        }
+
+        // apaga las camaras del juego (guarda cuales para devolverlas despues)
+        void DisableGameCameras()
+        {
+            foreach (var c in Camera.allCameras)
+            {
+                if (c == null || c == _specCam || !c.enabled) continue;
+                c.enabled = false;
+                if (!_disabledCams.Contains(c)) _disabledCams.Add(c);
+            }
+        }
+
+        void StartSpectate(Caporta.DriveUpTogether.Vehicle target, string name)
+        {
+            if (target == null) return;
+            EnsureSpecCam();
+            var main = Camera.main;
+            if (main != null && main != _specCam)
+            {
+                _specCam.fieldOfView = main.fieldOfView;
+                _specCam.farClipPlane = Mathf.Max(main.farClipPlane, 5000f);
+                _specCam.depth = main.depth + 1;
+                _specCam.cullingMask = main.cullingMask;
+            }
+            if (_specTarget == null) _specYaw = target.transform.eulerAngles.y;
+            _specTarget = target;
+            _specName = name;
+            _specLost = 0;
+            _specCam.enabled = true;
+            DisableGameCameras();
+        }
+
+        void StopSpectate()
+        {
+            _specTarget = null;
+            _specName = null;
+            if (_specCam != null) _specCam.enabled = false;
+            foreach (var c in _disabledCams) { try { if (c != null) c.enabled = true; } catch { } }
+            _disabledCams.Clear();
+        }
+
+        void SpectateNext()
+        {
+            RefreshOthers();
+            if (_others.Count == 0) { StopSpectate(); return; }
+            int idx = -1;
+            for (int i = 0; i < _others.Count; i++)
+                if (_specTarget != null && _others[i].veh.Pointer == _specTarget.Pointer) idx = i;
+            if (idx == _others.Count - 1) { StopSpectate(); return; }   // despues del ultimo vuelve a tu coche
+            var next = _others[idx + 1];
+            StartSpectate(next.veh, next.name);
+        }
+
+        static bool IsUsable(Caporta.DriveUpTogether.Vehicle v)
+        {
+            try
+            {
+                if (v == null || v.gameObject == null || !v.gameObject.activeInHierarchy) return false;
+                if (v.IsGhost != null && v.IsGhost.Value) return false;
+                var p = v.transform.position;
+                return !(float.IsNaN(p.x) || float.IsInfinity(p.y) || p.y < -5000f);
+            }
+            catch { return false; }
+        }
+
+        void LateUpdate()
+        {
+            // camara de espectador
+            if (_specTarget != null && !IsUsable(_specTarget))
+            {
+                // se reinicio o murio: buscar su coche nuevo por nombre durante unos segundos
+                _specLost += Time.unscaledDeltaTime;
+                RefreshOthers();
+                foreach (var (n, v) in _others)
+                    if (n == _specName && IsUsable(v)) { _specTarget = v; _specLost = 0; break; }
+                if (_specLost > 3f) StopSpectate();
+            }
+            if (_specTarget != null && IsUsable(_specTarget))
+            {
+                EnsureSpecCam();
+                if (!_specCam.enabled) _specCam.enabled = true;
+                DisableGameCameras();   // por si el juego reactivo alguna al reiniciar
+                var mouse = Mouse.current;
+                if (mouse != null && !_menuOpen)
+                {
+                    var d = mouse.delta.ReadValue();
+                    _specYaw += d.x * 0.15f;
+                    _specPitch = Mathf.Clamp(_specPitch - d.y * 0.15f, -20f, 80f);
+                    float s = mouse.scroll.ReadValue().y;
+                    if (Mathf.Abs(s) > 0.01f) _specDist = Mathf.Clamp(_specDist - Mathf.Sign(s) * 1f, 3f, 40f);
+                }
+                Vector3 focus = _specTarget.transform.position + Vector3.up * 1.2f;
+                var rot = Quaternion.Euler(_specPitch, _specYaw, 0f);
+                _specCam.transform.position = focus - rot * Vector3.forward * _specDist;
+                _specCam.transform.rotation = rot;
+            }
+            else if (_specTarget == null && _disabledCams.Count > 0)
+            {
+                StopSpectate(); // seguridad: nunca dejar el juego sin camara
+            }
+
+            // mapa "Infinito (Mod)": se aplica cuando el juego carga nuestro mapa de la lista
+            if (MapMod.IsActive)
+            {
+                int scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
+                if (_inVoid && scene != _mapScene) LeaveMap();      // se recargo la escena
+                if (!_inVoid) TryApplyMap();
+                else FollowFloor();
+            }
+            else if (_inVoid) LeaveMap();
+        }
+
+        void FollowFloor()
+        {
+            if (_floor == null) return;
+            var rb = FindLocalBody();
+            if (rb == null) return;
+            // sigue al coche a saltos de una baldosa, asi la textura no se mueve
+            var p = rb.position;
+            float sx = Mathf.Round(p.x / FloorTile) * FloorTile, sz = Mathf.Round(p.z / FloorTile) * FloorTile;
+            _floor.transform.position = new Vector3(sx, _floorY - 0.5f, sz);
+        }
+
+        // ---------- mapa propio: piso gris con cuadricula, sin el mundo del juego
+        const float FloorTile = 4f;      // metros por baldosa
+        const float FloorSize = 6000f;
+        float _floorY;
+        int _mapScene;
+        readonly List<Renderer> _hiddenRenderers = new();
+        readonly List<Terrain> _hiddenTerrains = new();
+        readonly List<Collider> _disabledColliders = new();
+        readonly List<(Camera cam, CameraClearFlags flags, Color bg)> _camBg = new();
+        Material _prevSkybox; bool _prevFog;
+
+        void TryApplyMap()
+        {
+            var rb = FindLocalBody();
+            if (rb == null) return;     // todavia no aparecio el coche
+
+            // altura del suelo en el punto de salida (antes de quitar las colisiones del mundo)
+            _floorY = rb.position.y - 1f;
+            try
+            {
+                foreach (var h in Physics.RaycastAll(rb.worldCenterOfMass + Vector3.up * 2f, Vector3.down, 50f, ~0, QueryTriggerInteraction.Ignore))
+                {
+                    var col = h.collider;
+                    if (col == null) continue;
+                    if (col.attachedRigidbody != null && col.attachedRigidbody.Pointer == rb.Pointer) continue;
+                    _floorY = h.point.y;
+                    break;
+                }
+            }
+            catch { }
+
+            if (_floor == null) _floor = CreateFloor(rb);
+            _floor.SetActive(true);
+            FollowFloor();
+            HideWorld();
+            _mapScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
+            _inVoid = true;
+            // por si el coche quedo dentro de algo
+            var p = rb.position;
+            if (p.y < _floorY + 0.5f) TeleportTo(new Vector3(p.x, _floorY + 1.5f, p.z), LevelRotation(rb));
+            Plugin.MarkUsed("mapa " + MapMod.DisplayName);
+            Plugin.L.LogInfo($"Mapa {MapMod.DisplayName} aplicado (piso a {_floorY:0.0} m)");
+        }
+
+        void LeaveMap()
+        {
+            _inVoid = false;
+            ShowWorld();
+            if (_floor != null) _floor.SetActive(false);
+        }
+
+        static bool UnderVehicle(Transform t, Il2CppArrayBase<Caporta.DriveUpTogether.Vehicle> cars)
+        {
+            foreach (var c in cars)
+                if (c != null && t.IsChildOf(c.transform)) return true;
+            return false;
+        }
+
+        // oculta todo lo que se dibuja del mapa (no los coches ni el piso propio) y pone el cielo oscuro
+        void HideWorld()
+        {
+            _hiddenRenderers.Clear(); _hiddenTerrains.Clear(); _camBg.Clear();
+            try
+            {
+                var cars = UnityEngine.Object.FindObjectsByType<Caporta.DriveUpTogether.Vehicle>(FindObjectsSortMode.None);
+                foreach (var r in UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None))
+                {
+                    if (r == null || !r.enabled || r.gameObject == _floor) continue;
+                    bool isCar = false;
+                    foreach (var c in cars)
+                        if (c != null && r.transform.IsChildOf(c.transform)) { isCar = true; break; }
+                    if (isCar) continue;
+                    r.enabled = false;
+                    _hiddenRenderers.Add(r);
+                }
+                foreach (var t in UnityEngine.Object.FindObjectsByType<Terrain>(FindObjectsSortMode.None))
+                    if (t != null && t.enabled) { t.enabled = false; _hiddenTerrains.Add(t); }
+                _disabledColliders.Clear();
+                foreach (var col in UnityEngine.Object.FindObjectsByType<Collider>(FindObjectsSortMode.None))
+                {
+                    if (col == null || !col.enabled || col.isTrigger || col.gameObject == _floor) continue;
+                    if (UnderVehicle(col.transform, cars)) continue;
+                    col.enabled = false;
+                    _disabledColliders.Add(col);
+                }
+            }
+            catch (Exception e) { Plugin.L.LogWarning("No se pudo ocultar el mapa: " + e.Message); }
+
+            _prevSkybox = RenderSettings.skybox; _prevFog = RenderSettings.fog;
+            RenderSettings.skybox = null; RenderSettings.fog = false;
+            var bg = new Color(0.04f, 0.045f, 0.05f);
+            foreach (var c in Camera.allCameras)
+            {
+                if (c == null) continue;
+                _camBg.Add((c, c.clearFlags, c.backgroundColor));
+                c.clearFlags = CameraClearFlags.SolidColor;
+                c.backgroundColor = bg;
+            }
+            if (_specCam != null) { _specCam.clearFlags = CameraClearFlags.SolidColor; _specCam.backgroundColor = bg; }
+            Plugin.L.LogInfo($"Mapa propio: {_hiddenRenderers.Count} objetos ocultos, {_disabledColliders.Count} colisiones quitadas");
+        }
+
+        void ShowWorld()
+        {
+            foreach (var r in _hiddenRenderers) { try { if (r != null) r.enabled = true; } catch { } }
+            foreach (var t in _hiddenTerrains) { try { if (t != null) t.enabled = true; } catch { } }
+            foreach (var c in _disabledColliders) { try { if (c != null) c.enabled = true; } catch { } }
+            _disabledColliders.Clear();
+            foreach (var (c, f, bg) in _camBg) { try { if (c != null) { c.clearFlags = f; c.backgroundColor = bg; } } catch { } }
+            if (_specCam != null) _specCam.clearFlags = CameraClearFlags.Skybox;
+            _hiddenRenderers.Clear(); _hiddenTerrains.Clear(); _camBg.Clear();
+            RenderSettings.skybox = _prevSkybox; RenderSettings.fog = _prevFog;
+        }
+
+        // textura de baldosa: gris con bordes mas oscuros y una linea fina en el medio
+        static Texture2D MakeGridTexture()
+        {
+            const int N = 128;
+            var t = new Texture2D(N, N, TextureFormat.RGBA32, true);
+            var baseC = new Color(0.42f, 0.43f, 0.45f);
+            var line = new Color(0.27f, 0.28f, 0.30f);
+            var thin = new Color(0.36f, 0.37f, 0.39f);
+            for (int y = 0; y < N; y++)
+                for (int x = 0; x < N; x++)
+                {
+                    Color c = baseC;
+                    if (x < 3 || y < 3 || x >= N - 3 || y >= N - 3) c = line;
+                    else if (x == N / 2 || y == N / 2) c = thin;
+                    // un poco de ruido para que se note el movimiento
+                    float n = (((x * 73856093) ^ (y * 19349663)) & 7) / 300f;
+                    t.SetPixel(x, y, new Color(c.r + n, c.g + n, c.b + n));
+                }
+            t.wrapMode = TextureWrapMode.Repeat;
+            t.filterMode = FilterMode.Trilinear;
+            t.anisoLevel = 8;
+            t.Apply(true);
+            t.hideFlags = HideFlags.HideAndDontSave;
+            return t;
+        }
+
+        GameObject CreateFloor(Rigidbody car)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = "FlyModPiso";
+            UnityEngine.Object.DontDestroyOnLoad(go);
+            go.transform.localScale = new Vector3(FloorSize, 1f, FloorSize);
+
+            // misma capa que el suelo que pisa el coche ahora, para que las ruedas lo detecten
+            try
+            {
+                foreach (var h in Physics.RaycastAll(car.worldCenterOfMass, Vector3.down, 10f, ~0, QueryTriggerInteraction.Ignore))
+                {
+                    var col = h.collider;
+                    if (col == null) continue;
+                    if (col.attachedRigidbody != null && col.attachedRigidbody.Pointer == car.Pointer) continue;
+                    go.layer = col.gameObject.layer;
+                    break;
+                }
+            }
+            catch { }
+
+            var r = go.GetComponent<Renderer>();
+            if (r != null)
+            {
+                Shader sh = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Unlit/Texture");
+                var m = sh != null ? new Material(sh) : r.material;
+                var tex = MakeGridTexture();
+                m.mainTexture = tex;
+                if (m.HasProperty("_BaseMap")) m.SetTexture("_BaseMap", tex);
+                m.color = Color.white;
+                if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", Color.white);
+                var scale = new Vector2(FloorSize / FloorTile, FloorSize / FloorTile);
+                m.mainTextureScale = scale;
+                if (m.HasProperty("_BaseMap")) m.SetTextureScale("_BaseMap", scale);
+                r.material = m;
+                Plugin.L.LogInfo("Piso: shader " + (sh != null ? sh.name : "(por defecto)"));
+            }
+            return go;
         }
 
         // suelo a menos de ~2.5 m bajo el coche (ignora los colliders del propio coche)
@@ -594,6 +990,7 @@ namespace DutFly
             // aviso arriba a la izquierda
             bool boosting = Held(Settings.KeyBoost) && !_flying;
             string chip = _flying ? "FLY" : _trick != 0 ? "TRUCO AEREO" : boosting ? "BOOST" : null;
+            if (_specTarget != null) chip = "VIENDO: " + _specName + "  [" + Settings.P(Settings.KeySpec) + " siguiente]";
             float hx = 12;
             if (chip != null) { Ui.Chip(new Rect(hx, 12, 0, 24), chip, Ui.Accent, Ui.Dark); hx += Ui.ChipWidth(chip) + 6; }
             if (Plugin.UsedThisSession) Ui.Chip(new Rect(hx, 12, 0, 24), "Leaderboard bloqueado hasta reiniciar", Ui.Red, Color.white);
@@ -623,14 +1020,65 @@ namespace DutFly
 
             // pestanas
             _y = 58;
-            string[] tabs = { "Fly", "Flip", "Truco", "Coche", "Teclas" };
-            float tw = CW / tabs.Length;
+            string[] tabs = { "Fly", "Flip", "Truco", "Coche", "TP", "Ver", "Mapa", "Teclas" };
+            const int perRow = 4;
+            float tw = CW / perRow;
             for (int i = 0; i < tabs.Length; i++)
-                if (GUI.Button(new Rect(X + i * tw, _y, tw - 4, 28), tabs[i], _tab == i ? Ui.TabOn : Ui.Tab)) _tab = i;
-            _y += 40;
+            {
+                float tx = X + (i % perRow) * tw, ty = _y + (i / perRow) * 32;
+                if (GUI.Button(new Rect(tx, ty, tw - 4, 28), tabs[i], _tab == i ? Ui.TabOn : Ui.Tab)) _tab = i;
+            }
+            _y += 32 * ((tabs.Length + perRow - 1) / perRow) + 8;
 
             switch (_tab)
             {
+                case 4:
+                    Section("IR A UN JUGADOR");
+                    PlayerList("TP", (v, n) => TeleportToVehicle(v));
+                    Section("IR A COORDENADAS");
+                    CoordFields();
+                    {
+                        float bw = (CW - 8) / 2f;
+                        if (GUI.Button(new Rect(X, _y, bw, 28), "Usar mi posicion", Ui.Tab))
+                        {
+                            var rb = FindLocalBody();
+                            if (rb != null)
+                            {
+                                _txt["tpX"] = Fmt(rb.position.x); _txt["tpY"] = Fmt(rb.position.y); _txt["tpZ"] = Fmt(rb.position.z);
+                            }
+                        }
+                        if (GUI.Button(new Rect(X + bw + 8, _y, bw, 28), "TP a coordenadas", Ui.Primary))
+                        {
+                            var rb = FindLocalBody();
+                            if (rb != null)
+                                TeleportTo(new Vector3(ParseF(_txt["tpX"]), ParseF(_txt["tpY"]), ParseF(_txt["tpZ"])), LevelRotation(rb));
+                        }
+                        _y += 38;
+                    }
+                    Section("POSICION GUARDADA");
+                    {
+                        float bw = (CW - 8) / 2f;
+                        if (GUI.Button(new Rect(X, _y, bw, 28), "Guardar aqui", Ui.Tab)) SavePosition();
+                        bool has = _savedPos.HasValue;
+                        if (GUI.Button(new Rect(X + bw + 8, _y, bw, 28), has ? "Volver" : "(sin guardar)", has ? Ui.Primary : Ui.Tab) && has)
+                            TeleportTo(_savedPos.Value + Vector3.up * 0.5f, _savedRot);
+                        _y += 36;
+                        if (has) Hint("Guardada: " + Fmt(_savedPos.Value.x) + ", " + Fmt(_savedPos.Value.y) + ", " + Fmt(_savedPos.Value.z));
+                    }
+                    break;
+                case 5:
+                    Section("VER A OTROS JUGADORES  [" + Settings.P(Settings.KeySpec) + "]");
+                    Hint("Tu camara se pone detras de su coche. Mouse para girar, rueda para acercar.");
+                    PlayerList("Ver", (v, n) => StartSpectate(v, n));
+                    if (_specTarget != null && Button("Volver a mi coche")) StopSpectate();
+                    break;
+                case 6:
+                    Section("MOD DE MAPAS");
+                    Hint("El mapa '" + MapMod.DisplayName + "' aparece en la lista de mapas del juego (gratis). Eligelo al crear la partida: piso gris con cuadricula infinito y nada mas.");
+                    Hint("Tus amigos tambien necesitan el mod para jugarlo contigo. En ese mapa nunca se sube puntuacion.");
+                    GUI.Label(new Rect(X, _y, CW, 22), MapMod.IsActive ? "Estado: estas en " + MapMod.DisplayName : "Estado: no estas en el mapa", Ui.Label);
+                    _y += 28;
+                    break;
                 case 0:
                     Section("VUELO");
                     if (Switch("Fly activo", _flying, Settings.P(Settings.KeyFly)) != _flying) ToggleFly();
@@ -649,7 +1097,7 @@ namespace DutFly
                     break;
                 case 2:
                     Section("TRUCO AEREO  [" + Settings.P(Settings.KeyTrick) + "]");
-                    Hint("Sube el coche, da vueltas, se pone horizontal y lo deja caer.");
+                    Hint("Lanza el coche con impulso, da las volteretas en el aire avanzando, se pone horizontal y cae con la gravedad.");
                     Slider("Altura", Settings.TrickHeight, 1, 100, "m");
                     Slider("Distancia", Settings.TrickDistance, 0, 50, "m");
                     Slider("Volteretas", Settings.TrickTurns, 1, 20, "");
@@ -780,24 +1228,253 @@ namespace DutFly
             return value;
         }
 
-        // tiempo aproximado del truco aereo: subida + volteretas + caida libre
+        // tiempo aproximado del truco aereo (tiro parabolico: sube, gira en el aire y cae)
         void Estimate()
         {
-            float h = Mathf.Max(0f, Settings.TrickHeight.Value);
-            float up = h / Settings.TrickRiseSpeed;
-            float spin = Mathf.Max(0.25f, Settings.TrickTurns.Value) / Mathf.Max(0.1f, Settings.TrickSpin.Value);
-            float fall = Mathf.Sqrt(2f * h / 9.81f);
-            float total = up + spin + fall;
-            var box = new Rect(X, _y + 2, CW, 40);
+            var (up, air, spin) = TrickTimes();
+            string F(float f) => f.ToString("0.0", CultureInfo.InvariantCulture);
+            bool late = spin > air;
+            var box = new Rect(X, _y + 2, CW, late ? 58 : 40);
             GUI.DrawTexture(box, Ui.TexField);
-            GUI.Label(new Rect(X + 10, _y + 4, CW - 20, 20), "Tiempo estimado:  " + total.ToString("0.0", CultureInfo.InvariantCulture) + " s", Ui.Label);
+            GUI.Label(new Rect(X + 10, _y + 4, CW - 20, 20), "Tiempo estimado:  " + F(Mathf.Max(air, spin)) + " s", Ui.Label);
             GUI.Label(new Rect(X + 10, _y + 22, CW - 20, 18),
-                "subida " + up.ToString("0.0", CultureInfo.InvariantCulture) + " s  +  volteretas " + spin.ToString("0.0", CultureInfo.InvariantCulture) +
-                " s  +  caida " + fall.ToString("0.0", CultureInfo.InvariantCulture) + " s", Ui.Hint);
-            _y += 50;
+                "subida " + F(up) + " s  +  caida " + F(up) + " s   |   volteretas " + F(spin) + " s", Ui.Hint);
+            if (late)
+                GUI.Label(new Rect(X + 10, _y + 38, CW - 20, 18), "No le da tiempo: sube la altura o la velocidad", Ui.Warn);
+            _y += late ? 68 : 50;
         }
 
+        // lista de jugadores (con un boton por fila)
+        void PlayerList(string action, Action<Caporta.DriveUpTogether.Vehicle, string> onClick)
+        {
+            if (_others.Count == 0) { Hint("No hay otros jugadores en la partida."); return; }
+            foreach (var (name, veh) in _others)
+            {
+                GUI.Label(new Rect(X, _y + 3, CW - 110, 22), name, Ui.Label);
+                if (GUI.Button(new Rect(X + CW - 100, _y, 100, 26), action, Ui.Key)) onClick(veh, name);
+                _y += 31;
+            }
+        }
+
+        void CoordFields()
+        {
+            float w = (CW - 16) / 3f;
+            string[] axes = { "X", "Y", "Z" };
+            for (int i = 0; i < 3; i++)
+            {
+                string k = "tp" + axes[i];
+                if (!_txt.TryGetValue(k, out var buf)) buf = "0";
+                GUI.Label(new Rect(X + i * (w + 8), _y + 3, 14, 20), axes[i], Ui.Section);
+                _txt[k] = GUI.TextField(new Rect(X + i * (w + 8) + 14, _y, w - 14, 24), buf, Ui.Field);
+            }
+            _y += 32;
+        }
+
+        static float ParseF(string s) =>
+            float.TryParse((s ?? "").Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var f) ? f : 0f;
+
         static string Fmt(float f) => f.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    // ---------------------------------------------------------------- mod de mapas
+    // Agrega "Infinito (Mod)" a la lista de mapas del juego. Usa la escena de Playground como base;
+    // al cargarse, FlyBehaviour oculta el mundo y pone el piso gris infinito.
+    //
+    // OJO (IL2CPP): metodos pequenos con el mismo codigo maquina se comparten entre clases
+    // (p. ej. todos los getters que devuelven un campo). Parchear uno parchea todos. Por eso:
+    //  - no se parchea ningun getter; el catalogo se busca con Resources.FindObjectsOfTypeAll,
+    //  - en cada parche se comprueba la clase real del objeto antes de usarlo.
+    static class MapMod
+    {
+        public const string Id = "flymod_infinito";
+        public const string DisplayName = "Infinito (Mod)";
+        public static MapDefinition Def;
+        public static string BaseScene;
+        public static string CurrentId;
+        public static bool IsActive => CurrentId == Id;
+        static bool _logged;
+        static float _searchTimer;
+
+        // la clase IL2CPP real del objeto es T (o hereda de T)
+        static bool Is<T>(Il2CppObjectBase o) where T : Il2CppObjectBase
+        {
+            try
+            {
+                if (o == null || o.Pointer == IntPtr.Zero) return false;
+                var klass = IL2CPP.il2cpp_object_get_class(o.Pointer);
+                var want = Il2CppClassPointerStore<T>.NativeClassPtr;
+                return klass != IntPtr.Zero && want != IntPtr.Zero && IL2CPP.il2cpp_class_is_assignable_from(want, klass);
+            }
+            catch { return false; }
+        }
+
+        static bool IsOurs(MapDefinition m) => m != null && Def != null && m.Pointer == Def.Pointer;
+
+        public static void Patch(Harmony h)
+        {
+            void Hook(Type t, string method, string pre, string post)
+            {
+                try
+                {
+                    var m = AccessTools.Method(t, method);
+                    if (m == null) { Plugin.L.LogWarning($"Mapas: no existe {t.Name}.{method}"); return; }
+                    h.Patch(m,
+                        prefix: pre == null ? null : new HarmonyMethod(typeof(MapMod).GetMethod(pre, BindingFlags.Static | BindingFlags.NonPublic)),
+                        postfix: post == null ? null : new HarmonyMethod(typeof(MapMod).GetMethod(post, BindingFlags.Static | BindingFlags.NonPublic)));
+                }
+                catch (Exception e) { Plugin.L.LogWarning($"Mapas: no se pudo parchear {t.Name}.{method}: {e.Message}"); }
+            }
+
+            // solo metodos con logica propia (no getters)
+            Hook(typeof(MapCatalog), "Resolve", null, nameof(ResolvePost));
+            Hook(typeof(MapCatalog), "FindByScene", null, nameof(FindByScenePost));
+            Hook(typeof(GameSceneContext), "SetActiveMap", nameof(SetActivePre), null);
+            foreach (var n in new[] { "IsFree", "IsOwned", "CanAfford" }) Hook(typeof(MapOwnership), n, null, nameof(OwnedPost));
+            Hook(typeof(LobbyGameSettings), "IsOwnedByMe", null, nameof(OwnedPost));
+
+            // ventana "Game Settings": asegurar el mapa en SU catalogo y reconstruir las filas si hace falta
+            Hook(typeof(Caporta.DriveUpTogether.UI.GameSettingsPresenter), "Open", nameof(PresenterPre), null);
+            Hook(typeof(Caporta.DriveUpTogether.UI.GameSettingsPresenter), "BuildMapRows", nameof(PresenterPre), null);
+        }
+
+        static void PresenterPre(Caporta.DriveUpTogether.UI.GameSettingsPresenter __instance)
+        {
+            try
+            {
+                if (!Is<Caporta.DriveUpTogether.UI.GameSettingsPresenter>(__instance)) return;
+                var settings = __instance._settings;
+                if (!Is<LobbyGameSettings>(settings)) return;
+                var cat = settings.Catalog;
+                if (!Is<MapCatalog>(cat)) return;
+                bool added = Ensure(cat);
+                if (added && __instance._built)
+                {
+                    // las filas se hicieron sin nuestro mapa: borrarlas para que el juego las rehaga
+                    __instance._built = false;
+                    try { __instance._rows?.Clear(); } catch { }
+                    try { __instance._mapList?.Clear(); } catch { }
+                    Plugin.L.LogInfo("Mapas: lista de la ventana reconstruida");
+                }
+            }
+            catch (Exception e) { Plugin.L.LogWarning("Mapas (ventana): " + e.Message); }
+        }
+
+        static void ResolvePost(MapCatalog __instance, string __0, ref MapDefinition __result)
+        {
+            if (Def == null || !Is<MapCatalog>(__instance)) return;
+            if (__0 == Id) __result = Def;
+        }
+
+        // nuestro mapa comparte escena con Playground: si estamos en el nuestro, devolver el nuestro
+        static void FindByScenePost(MapCatalog __instance, string __0, ref MapDefinition __result)
+        {
+            if (Def == null || !IsActive || !Is<MapCatalog>(__instance)) return;
+            if (__0 == BaseScene) __result = Def;
+        }
+
+        static void SetActivePre(MapDefinition __0)
+        {
+            if (__0 == null) { CurrentId = null; return; }
+            if (IsOurs(__0)) { CurrentId = Id; return; }
+            if (Is<MapDefinition>(__0)) CurrentId = __0.mapId;
+        }
+
+        static void OwnedPost(MapDefinition __0, ref bool __result)
+        {
+            if (IsOurs(__0)) __result = true;   // solo compara punteros: seguro aunque el metodo sea compartido
+        }
+
+        // llamado desde FlyBehaviour.Update: busca el catalogo y agrega el mapa si falta
+        public static void Tick()
+        {
+            _searchTimer -= Time.unscaledDeltaTime;
+            if (_searchTimer > 0) return;
+            _searchTimer = 2f;
+            try
+            {
+                foreach (var cat in Resources.FindObjectsOfTypeAll<MapCatalog>())
+                    if (Is<MapCatalog>(cat)) Ensure(cat);
+            }
+            catch (Exception e) { Plugin.L.LogWarning("Mapas: " + e.Message); }
+        }
+
+        // devuelve true si lo acaba de agregar a este catalogo
+        static bool Ensure(MapCatalog cat)
+        {
+            var list = cat.maps;
+            if (list == null) return false;
+            for (int i = 0; i < list.Count; i++)
+                if (IsOurs(list[i])) return false;   // ya esta
+
+            // elegir la base: Playground si existe, si no el mapa por defecto
+            MapDefinition baseMap = null;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var m = list[i];
+                if (!Is<MapDefinition>(m)) continue;
+                if (!_logged) Plugin.L.LogInfo($"Mapa del juego: id={m.mapId} nombre={m.displayName} escena={m.sceneName} precio={m.price}");
+                string all = ((m.displayName ?? "") + " " + (m.sceneName ?? "") + " " + (m.mapId ?? "")).ToLowerInvariant();
+                if (baseMap == null && all.Contains("playground")) baseMap = m;
+            }
+            _logged = true;
+            if (baseMap == null && Is<MapDefinition>(cat.defaultMap)) baseMap = cat.defaultMap;
+            if (baseMap == null)
+                for (int i = 0; i < list.Count && baseMap == null; i++) if (Is<MapDefinition>(list[i])) baseMap = list[i];
+            if (baseMap == null || string.IsNullOrEmpty(baseMap.sceneName)) return false;
+
+            if (Def == null)
+            {
+                Def = ScriptableObject.CreateInstance<MapDefinition>();
+                Def.hideFlags = HideFlags.DontUnloadUnusedAsset;
+                Def.name = Id;
+                Def.mapId = Id;
+                Def.displayName = DisplayName;
+                Def.sceneName = baseMap.sceneName;
+                Def.descriptionKey = baseMap.descriptionKey;
+                Def.finishAltitude = baseMap.finishAltitude;
+                Def.hudContrastFlip = baseMap.hudContrastFlip;
+                Def.drawDistance = baseMap.drawDistance;
+                Def.allowedCarClasses = baseMap.allowedCarClasses;
+                Def.chapters = baseMap.chapters;
+                Def.price = 0;
+                Def.thumbnail = MakeThumbnail() ?? baseMap.thumbnail;
+                BaseScene = baseMap.sceneName;
+            }
+            list.Add(Def);
+            Plugin.L.LogInfo($"Mapa '{DisplayName}' agregado a un catalogo (base: {baseMap.displayName} / {BaseScene})");
+            return true;
+        }
+
+        static Sprite MakeThumbnail()
+        {
+            try
+            {
+                const int W = 256, H = 144;
+                var t = new Texture2D(W, H, TextureFormat.RGBA32, false);
+                for (int y = 0; y < H; y++)
+                    for (int x = 0; x < W; x++)
+                    {
+                        // cuadricula en perspectiva: lineas que se juntan hacia el horizonte
+                        float v = y / (float)H;
+                        Color c = v > 0.55f ? new Color(0.06f, 0.065f, 0.07f) : new Color(0.40f, 0.41f, 0.43f);
+                        if (v <= 0.55f)
+                        {
+                            float depth = 1f / (0.56f - v);
+                            float gx = (x - W / 2f) / W * depth * 2f;
+                            float gz = depth * 0.6f;
+                            if (Mathf.Abs(gx - Mathf.Round(gx)) < 0.03f * depth || Mathf.Abs(gz - Mathf.Round(gz)) < 0.03f * depth)
+                                c = new Color(0.26f, 0.27f, 0.29f);
+                        }
+                        t.SetPixel(x, y, c);
+                    }
+                t.Apply();
+                t.hideFlags = HideFlags.HideAndDontSave;
+                var s = Sprite.Create(t, new Rect(0, 0, W, H), new Vector2(0.5f, 0.5f));
+                s.hideFlags = HideFlags.HideAndDontSave;
+                return s;
+            }
+            catch { return null; }
+        }
     }
 
     // ---------------------------------------------------------------- estilos
@@ -810,7 +1487,7 @@ namespace DutFly
         public static readonly Color Green = new Color(0.2f, 0.7f, 0.4f);
 
         public static Texture2D TexBg, TexHeader, TexAccent, TexTrack, TexKnob, TexBtn, TexBtnHover, TexField, TexChip;
-        public static GUIStyle Window, Title, Sub, Section, Label, Hint, Tab, TabOn, Primary, Key, Field, CloseBtn, ChipStyle;
+        public static GUIStyle Window, Title, Sub, Section, Label, Hint, Warn, Tab, TabOn, Primary, Key, Field, CloseBtn, ChipStyle;
         static bool _ready;
 
         static Texture2D Tex(Color c)
@@ -867,6 +1544,8 @@ namespace DutFly
             Label.normal.textColor = new Color(0.9f, 0.91f, 0.93f);
             Hint = new GUIStyle(skin.label) { fontSize = 11, wordWrap = true };
             Hint.normal.textColor = new Color(0.55f, 0.58f, 0.63f);
+            Warn = new GUIStyle(skin.label) { fontSize = 11, fontStyle = FontStyle.Bold, wordWrap = true };
+            Warn.normal.textColor = new Color(1f, 0.45f, 0.4f);
 
             Tab = Box(skin.button, TexBtn, TexBtnHover, new Color(0.75f, 0.77f, 0.8f), 12, FontStyle.Bold);
             TabOn = Box(skin.button, TexAccent, TexAccent, Dark, 12, FontStyle.Bold);

@@ -14,7 +14,7 @@ using System.Collections.Generic;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("FlyMod Installer")]
-[assembly: System.Reflection.AssemblyVersion("0.2.1.0")]
+[assembly: System.Reflection.AssemblyVersion("0.2.3.0")]
 
 namespace FlyModInstaller
 {
@@ -91,7 +91,7 @@ namespace FlyModInstaller
             Controls.Add(body);
             Controls.Add(_banner);
 
-            Log("Controles: 8 = menu, F8 = fly, G = voltereta, H = truco aereo, B = boost (se cambian en el menu, pestana Teclas).");
+            Log("Controles: 8 = menu, F8 = fly, G = voltereta, H = truco aereo, B = boost, N = espectar (se cambian en el menu, pestana Teclas).");
             if (string.IsNullOrEmpty(_path.Text)) Log("No encontre el juego automaticamente. Usa 'Buscar...'.");
             Shown += async (s, e) => await CheckUpdate();
         }
@@ -297,7 +297,7 @@ namespace FlyModInstaller
             WaitGameClosed();
             Log("Copiando BepInEx + FlyMod en " + game + " ...");
             CopyDir(Path.Combine(Payload, "juego"), game);
-            Log("Instalado. Abre el juego desde Steam y pulsa 8 para el menu.");
+            Log("Instalado. Abre el juego desde Steam y pulsa 8 para el menu. Nuevo mapa: Infinito (Mod) en la lista de mapas.");
             Log("Al usar cualquier truco se bloquean leaderboard, logros y recompensas hasta cerrar el juego.");
         }
 
