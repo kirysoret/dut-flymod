@@ -1,6 +1,6 @@
-version=0.2.3
-notas=Mod de mapas: Infinito (Mod) gratis en la lista, TP, espectador (N), truco con fisica real
-mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/864c717becdd144577c55d0c5ba0a9d550fe0094/FlyMod.dll
-mod_sha256=6AD297371FAFC09786E0EE6E4EFB2ED9F8FA3E8854789426A9DF88FE3BF00E16
-instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/864c717becdd144577c55d0c5ba0a9d550fe0094/FlyModInstaller.exe
-instalador_sha256=308BF0AC667C4B7E9DBB62B824580C1588A46AC6836328B8091A4EAC954D353D
+version=0.2.4
+notas=Cualquier auto en cualquier mapa (All cars)
+mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/9b80a9f5847b3bd8ff4ff58a27c7852363196f58/FlyMod.dll
+mod_sha256=67814427A5A4A0F3EAA8FED7C823A0E166409F2C1F365D9336244EC9B45963AB
+instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/9b80a9f5847b3bd8ff4ff58a27c7852363196f58/FlyModInstaller.exe
+instalador_sha256=CE15D6E434F9C39B203AC765E7618F58959D448611E9835B0D9D57A5495DDDF2
