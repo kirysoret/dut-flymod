@@ -1,6 +1,6 @@
-version=2.0.1
-notas=Menu en la tecla 8, boost mas fuerte con aviso BOOST en pantalla
-mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/c014a4bd69a419494e064ecb764534fed36fdd48/FlyMod.dll
-mod_sha256=12B63FFD1FDF0DCE494F36DEB14071E4382E9A865CBDC08E8EEB3FFC6427166D
-instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/c014a4bd69a419494e064ecb764534fed36fdd48/FlyModInstaller.exe
-instalador_sha256=DB0A7620B223C9ADACA40DF3AD146BC777C913C0ABDA6103C9833A88F7C29A38
+version=0.2.0
+notas=Primera Beta: menu en 8, voltereta solo desde el suelo (ya no sube spameando), boost mas fuerte
+mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/7e219b04518b6f3854cf772f866b8fb43db0a6b0/FlyMod.dll
+mod_sha256=27D580F93A231FCB73C69788B7E3A9FA0E6EA40AEF2392AE0FA3122D2E0592AA
+instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/7e219b04518b6f3854cf772f866b8fb43db0a6b0/FlyModInstaller.exe
+instalador_sha256=DF41DD961CA3E21747F18C53C12543A100CF7AF121B2FE5808D5C09505276012
