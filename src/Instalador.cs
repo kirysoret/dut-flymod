@@ -14,7 +14,7 @@ using System.Collections.Generic;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("FlyMod Installer")]
-[assembly: System.Reflection.AssemblyVersion("0.2.4.0")]
+[assembly: System.Reflection.AssemblyVersion("0.2.4.1")]
 
 namespace FlyModInstaller
 {

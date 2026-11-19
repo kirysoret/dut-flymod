@@ -27,7 +27,7 @@ namespace DutFly
     [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.4")]
     public class Plugin : BasePlugin
     {
-        public const string VersionName = "0.2.4 Beta";
+        public const string VersionName = "0.2.4.1 Beta";
         internal static ManualLogSource L;
         internal static ConfigFile Cfg;
         public static bool UsedThisSession;
@@ -193,7 +193,8 @@ namespace DutFly
         // truco aereo: 0 nada, 1 en el aire girando
         int _trick;
         Quaternion _trickLevel;
-        float _trickAngle, _trickTime, _trickMaxTime;
+        float _trickAngle, _trickTime;
+        Vector3 _trickStart;
 
         // TP / espectar / mapa
         readonly List<(string name, Caporta.DriveUpTogether.Vehicle veh)> _others = new();
@@ -390,19 +391,24 @@ namespace DutFly
             return Quaternion.LookRotation(fwd.normalized, Vector3.up);
         }
 
-        // ---------- truco aereo con fisica real:
-        // impulsa el coche hacia arriba (justo para llegar a "Altura") y hacia adelante (para recorrer
-        // "Distancia" en el aire), lo hace girar con velocidad angular y al completar las volteretas
-        // lo pone horizontal y deja que la gravedad lo baje.
+        // ---------- truco aereo guiado por fisica:
+        // 1) sube hasta exactamente "Altura" controlando la velocidad cada paso de fisica (y se endereza),
+        // 2) ya arriba, da las volteretas con velocidad angular mientras se mantiene a esa altura
+        //    y avanza "Distancia" metros,
+        // 3) se pone horizontal y lo suelta: cae con la gravedad.
+        // Nunca gira cerca del suelo (antes el morro golpeaba el suelo y lo lanzaba lejos).
+        const float TrickRise = 15f;        // m/s maximos de subida
+        const float TrickMaxSpeed = 60f;    // m/s maximos para seguir la trayectoria
         static float Gravity => Mathf.Max(0.1f, Mathf.Abs(Physics.gravity.y));
 
-        // devuelve (tiempo subiendo, tiempo total en el aire, tiempo de volteretas)
-        public static (float up, float air, float spin) TrickTimes()
+        // devuelve (tiempo subiendo, tiempo de volteretas, tiempo de caida)
+        public static (float up, float spin, float fall) TrickTimes()
         {
             float h = Mathf.Max(0.1f, Settings.TrickHeight.Value);
-            float up = Mathf.Sqrt(2f * h / Gravity);
+            float up = h / TrickRise + 0.3f;
             float spin = Mathf.Max(0.25f, Settings.TrickTurns.Value) / Mathf.Max(0.1f, Settings.TrickSpin.Value);
-            return (up, up * 2f, spin);
+            float fall = Mathf.Sqrt(2f * h / Gravity);
+            return (up, spin, fall);
         }
 
         void StartTrick()
@@ -411,19 +417,30 @@ namespace DutFly
             _rb = FindLocalBody();
             if (_rb == null) return;
             _flipLeft = 0;
-            var (up, air, _) = TrickTimes();
             _trickLevel = LevelRotation(_rb);
+            _trickStart = _rb.position + Vector3.up * Mathf.Max(0.5f, Settings.TrickHeight.Value);
             _trickAngle = 0;
             _trickTime = 0;
-            _trickMaxTime = air + 1f;
-
-            // empezar derecho y lanzar
-            _rb.rotation = _trickLevel;
             _rb.angularVelocity = Vector3.zero;
-            Vector3 fwd = _trickLevel * Vector3.forward;
-            _rb.linearVelocity = Vector3.up * (Gravity * up) + fwd * (Settings.TrickDistance.Value / air);
             _trick = 1;
             Plugin.MarkUsed("truco aereo");
+        }
+
+        // velocidad para llegar a "target" en este paso de fisica, limitada a maxSpeed
+        Vector3 VelocityTo(Vector3 target, float maxSpeed)
+        {
+            Vector3 v = (target - _rb.position) / Time.fixedDeltaTime;
+            return Vector3.ClampMagnitude(v, maxSpeed);
+        }
+
+        // velocidad angular para girar hacia "target" (control proporcional)
+        Vector3 AngularTo(Quaternion target, float gain)
+        {
+            Quaternion d = target * Quaternion.Inverse(_rb.rotation);
+            d.ToAngleAxis(out float ang, out Vector3 axis);
+            if (ang > 180f) ang -= 360f;
+            if (float.IsNaN(axis.x) || Mathf.Abs(ang) < 0.01f) return Vector3.zero;
+            return axis.normalized * (ang * Mathf.Deg2Rad * gain);
         }
 
         void TrickStep()
@@ -431,13 +448,32 @@ namespace DutFly
             if (_rb == null) { _trick = 0; return; }
             float dt = Time.fixedDeltaTime;
             _trickTime += dt;
+            Vector3 fwd = _trickLevel * Vector3.forward;
+
+            if (_trick == 1)
+            {
+                // subiendo: seguir hasta la altura exacta y enderezarse
+                _rb.linearVelocity = VelocityTo(_trickStart, TrickRise);
+                _rb.angularVelocity = AngularTo(_trickLevel, 10f);
+                bool arrived = (_rb.position - _trickStart).sqrMagnitude < 0.04f;
+                if (arrived || _trickTime > Settings.TrickHeight.Value / TrickRise + 3f)
+                {
+                    _rb.rotation = _trickLevel;
+                    _rb.angularVelocity = Vector3.zero;
+                    _trickTime = 0;
+                    _trick = 2;
+                }
+                return;
+            }
+
+            // volteretas: se mantiene a la altura y avanza "Distancia"
             float total = 360f * Mathf.Max(0.25f, Settings.TrickTurns.Value);
             float w = 360f * Mathf.Max(0.1f, Settings.TrickSpin.Value);      // grados por segundo
-            _trickAngle += w * dt;
-
-            if (_trickAngle >= total || _trickTime > _trickMaxTime) { EndTrick(); return; }
-            // giro hacia adelante alrededor del eje lateral del coche (fijo en el mundo)
+            _trickAngle = Mathf.Min(total, _trickAngle + w * dt);
+            float progress = _trickAngle / total;
+            _rb.linearVelocity = VelocityTo(_trickStart + fwd * (Settings.TrickDistance.Value * progress), TrickMaxSpeed);
             _rb.angularVelocity = (_trickLevel * Vector3.right) * (w * Mathf.Deg2Rad);
+            if (_trickAngle >= total) EndTrick();
         }
 
         void EndTrick()
@@ -445,8 +481,9 @@ namespace DutFly
             if (_rb != null)
             {
                 _rb.angularVelocity = Vector3.zero;
-                _rb.rotation = _trickLevel;         // horizontal perfecto
-                _rb.MoveRotation(_trickLevel);      // la velocidad lineal se conserva: cae con la gravedad
+                _rb.rotation = _trickLevel;          // horizontal perfecto
+                _rb.MoveRotation(_trickLevel);
+                _rb.linearVelocity = Vector3.zero;   // y lo suelta: cae con la gravedad
             }
             _trick = 0;
         }
@@ -1104,7 +1141,7 @@ namespace DutFly
                     break;
                 case 2:
                     Section("TRUCO AEREO  [" + Settings.P(Settings.KeyTrick) + "]");
-                    Hint("Lanza el coche con impulso, da las volteretas en el aire avanzando, se pone horizontal y cae con la gravedad.");
+                    Hint("Sube el coche con fisica hasta la altura, da las volteretas ahi avanzando la distancia, se pone horizontal y cae.");
                     Slider("Altura", Settings.TrickHeight, 1, 100, "m");
                     Slider("Distancia", Settings.TrickDistance, 0, 50, "m");
                     Slider("Volteretas", Settings.TrickTurns, 1, 20, "");
@@ -1235,20 +1272,17 @@ namespace DutFly
             return value;
         }
 
-        // tiempo aproximado del truco aereo (tiro parabolico: sube, gira en el aire y cae)
+        // tiempo aproximado del truco aereo: subida + volteretas + caida
         void Estimate()
         {
-            var (up, air, spin) = TrickTimes();
+            var (up, spin, fall) = TrickTimes();
             string F(float f) => f.ToString("0.0", CultureInfo.InvariantCulture);
-            bool late = spin > air;
-            var box = new Rect(X, _y + 2, CW, late ? 58 : 40);
+            var box = new Rect(X, _y + 2, CW, 40);
             GUI.DrawTexture(box, Ui.TexField);
-            GUI.Label(new Rect(X + 10, _y + 4, CW - 20, 20), "Tiempo estimado:  " + F(Mathf.Max(air, spin)) + " s", Ui.Label);
+            GUI.Label(new Rect(X + 10, _y + 4, CW - 20, 20), "Tiempo estimado:  " + F(up + spin + fall) + " s", Ui.Label);
             GUI.Label(new Rect(X + 10, _y + 22, CW - 20, 18),
-                "subida " + F(up) + " s  +  caida " + F(up) + " s   |   volteretas " + F(spin) + " s", Ui.Hint);
-            if (late)
-                GUI.Label(new Rect(X + 10, _y + 38, CW - 20, 18), "No le da tiempo: sube la altura o la velocidad", Ui.Warn);
-            _y += late ? 68 : 50;
+                "subida " + F(up) + " s  +  volteretas " + F(spin) + " s  +  caida " + F(fall) + " s", Ui.Hint);
+            _y += 50;
         }
 
         // lista de jugadores (con un boton por fila)
