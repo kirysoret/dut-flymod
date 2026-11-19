@@ -14,7 +14,7 @@ using System.Collections.Generic;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("FlyMod Installer")]
-[assembly: System.Reflection.AssemblyVersion("0.2.5.1")]
+[assembly: System.Reflection.AssemblyVersion("0.2.6.0")]
 
 namespace FlyModInstaller
 {
@@ -91,7 +91,7 @@ namespace FlyModInstaller
             Controls.Add(body);
             Controls.Add(_banner);
 
-            Log("Controles: 8 = menu, F8 = fly, G = voltereta, H = truco aereo, B = boost, N = espectar, J = arana (se cambian en el menu, pestana Teclas).");
+            Log("Controles: 8 = menu, F8 = fly, G = voltereta, H = truco aereo, B = boost, N = espectar, J = arana, K = parar (se cambian en el menu, pestana Teclas).");
             if (string.IsNullOrEmpty(_path.Text)) Log("No encontre el juego automaticamente. Usa 'Buscar...'.");
             Shown += async (s, e) => await CheckUpdate();
         }

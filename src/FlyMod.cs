@@ -24,10 +24,10 @@ using NWH.WheelController3D;
 
 namespace DutFly
 {
-    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.5")]
+    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.6")]
     public class Plugin : BasePlugin
     {
-        public const string VersionName = "0.2.5.1 Beta";
+        public const string VersionName = "0.2.6.0 Beta";
         internal static ManualLogSource L;
         internal static ConfigFile Cfg;
         public static bool UsedThisSession;
@@ -70,6 +70,7 @@ namespace DutFly
             // en IL2CPP los getters pequenos comparten codigo entre clases y parchear uno los parchea todos.
 
             MapMod.Patch(h);
+            ChatGif.Patch(h);
 
             L.LogInfo($"FlyMod {VersionName} cargado. {Settings.P(Settings.KeyMenu)} = menu.");
         }
@@ -130,9 +131,11 @@ namespace DutFly
         public static ConfigEntry<float> RgbSpeed;
         public static ConfigEntry<bool> Spider;
         public static ConfigEntry<float> SpiderStick, SpiderTurn, SpiderReach;
+        public static ConfigEntry<float> ChatInterval, ChatLoops;
+        public static ConfigEntry<string> ChatCustom;
         public static ConfigEntry<float> WinX, WinY;
 
-        public static ConfigEntry<string> KeyMenu, KeyFly, KeyUp, KeyDown, KeyFast, KeyFlip, KeyTrick, KeyBoost, KeySpec, KeySpider;
+        public static ConfigEntry<string> KeyMenu, KeyFly, KeyUp, KeyDown, KeyFast, KeyFlip, KeyTrick, KeyBoost, KeySpec, KeySpider, KeyStop;
         public static readonly List<(string label, ConfigEntry<string> entry)> Binds = new();
 
         public static void Bind(ConfigFile c)
@@ -161,6 +164,9 @@ namespace DutFly
             SpiderStick = c.Bind("Arana", "Agarre", 1.5f, "Fuerza que lo pega a la superficie (en gravedades)");
             SpiderTurn = c.Bind("Arana", "RapidezGiro", 4f, "Que tan rapido se inclina hacia la pared");
             SpiderReach = c.Bind("Arana", "Alcance", 4f, "Distancia a la que empieza a inclinarse hacia una pared (m)");
+            ChatInterval = c.Bind("ChatGif", "SegundosEntreFotogramas", 0.5f, "Tiempo entre mensajes de la animacion (minimo 0.05 s)");
+            ChatLoops = c.Bind("ChatGif", "Repeticiones", 2f, "Cuantas veces se repite la animacion");
+            ChatCustom = c.Bind("ChatGif", "Personalizada", "(o_o)|(-_-)|(o_o)|(^_^)", "Fotogramas separados por |");
             WinX = c.Bind("Menu", "X", 40f, ""); WinY = c.Bind("Menu", "Y", 80f, "");
 
             KeyMenu = Key(c, "Menu", "Digit8", "Abrir menu");
@@ -173,6 +179,7 @@ namespace DutFly
             KeyBoost = Key(c, "Boost", "B", "Boost (mantener)");
             KeySpec = Key(c, "Espectar", "N", "Ver siguiente jugador");
             KeySpider = Key(c, "Arana", "J", "Modo arana on/off");
+            KeyStop = Key(c, "Parar", "K", "Parar voltereta / truco");
         }
 
         // nombre legible de la tecla (Digit8 -> 8)
@@ -292,6 +299,8 @@ namespace DutFly
             if (Down(Settings.KeyTrick)) StartTrick();
             if (Down(Settings.KeySpec)) SpectateNext();
             if (Down(Settings.KeySpider)) { Settings.Spider.Value = !Settings.Spider.Value; Plugin.Cfg.Save(); }
+            if (Down(Settings.KeyStop)) StopTricks();
+            ChatGif.Tick();
 
             _othersTimer -= Time.unscaledDeltaTime;
             if (_othersTimer <= 0) { _othersTimer = 1f; RefreshOthers(); }
@@ -572,16 +581,24 @@ namespace DutFly
             }
             _spiderNormal = Vector3.Slerp(_spiderNormal, target, Mathf.Clamp01(dt * Mathf.Max(0.1f, Settings.SpiderTurn.Value) * 2f)).normalized;
 
-            // gravedad hacia la superficie
+            // gravedad hacia la superficie. En suelo plano es la gravedad normal (1 g); el agarre extra
+            // entra segun lo inclinada que este la superficie (0 en el suelo, todo en paredes y techos).
+            // Antes se aplicaba siempre y los autos pesados o con poco motor no podian moverse.
+            float tilt = Mathf.Clamp01((Vector3.Angle(_spiderNormal, Vector3.up) - 15f) / 60f);
+            float stick = _spiderSurface ? Mathf.Lerp(1f, Mathf.Max(1f, Settings.SpiderStick.Value), tilt) : 1f;
             _rb.useGravity = false;
-            _rb.AddForce(-_spiderNormal * (Gravity * Mathf.Max(0.1f, _spiderSurface ? Settings.SpiderStick.Value : 1f)), ForceMode.Acceleration);
+            _rb.AddForce(-_spiderNormal * (Gravity * stick), ForceMode.Acceleration);
 
-            // inclinar el auto hacia la normal conservando su giro con el volante
-            Quaternion want = Quaternion.FromToRotation(t.up, _spiderNormal) * _rb.rotation;
-            Vector3 align = AngularTo(want, Mathf.Max(0.1f, Settings.SpiderTurn.Value));
-            Vector3 w = _rb.angularVelocity;
-            Vector3 yaw = Vector3.Project(w, t.up);
-            _rb.angularVelocity = yaw + align;
+            // inclinar el auto hacia la normal conservando su giro con el volante.
+            // Si ya esta alineado (< 5 grados) no se toca: la suspension se comporta normal.
+            if (Vector3.Angle(t.up, _spiderNormal) > 5f)
+            {
+                Quaternion want = Quaternion.FromToRotation(t.up, _spiderNormal) * _rb.rotation;
+                Vector3 align = AngularTo(want, Mathf.Max(0.1f, Settings.SpiderTurn.Value));
+                Vector3 w = _rb.angularVelocity;
+                Vector3 yaw = Vector3.Project(w, t.up);
+                _rb.angularVelocity = yaw + align;
+            }
         }
 
         void SpiderRelease()
@@ -589,6 +606,22 @@ namespace DutFly
             _spiderActive = false;
             _spiderSurface = false;
             if (_rb != null) _rb.useGravity = true;
+        }
+
+        // corta al instante la voltereta o el truco: queda horizontal y cae normal
+        void StopTricks()
+        {
+            if (_trick != 0) EndTrick();
+            if (_flipLeft > 0)
+            {
+                _flipLeft = 0;
+                if (_rb != null)
+                {
+                    _rb.angularVelocity = Vector3.zero;
+                    _rb.rotation = _flipLevel;
+                    _rb.MoveRotation(_flipLevel);
+                }
+            }
         }
 
         // deja el auto de fabrica: multiplicadores x1, gravedad encendida y todos los modos apagados
@@ -1312,7 +1345,7 @@ namespace DutFly
 
             // pestanas
             _y = 58;
-            string[] tabs = { "Fly", "Flip", "Truco", "Coche", "TP", "Ver", "Mapa", "Teclas" };
+            string[] tabs = { "Fly", "Flip", "Truco", "Coche", "TP", "Ver", "Mapa", "Teclas" };   // "Chat" oculto
             const int perRow = 4;
             float tw = CW / perRow;
             for (int i = 0; i < tabs.Length; i++)
@@ -1392,7 +1425,8 @@ namespace DutFly
                     Slider("Salto", Settings.FlipHop, 0, 50, "m/s");
                     Slider("Vueltas", Settings.FlipTurns, 0.5f, 10, "");
                     FlipEstimate();
-                    if (Button("Hacer voltereta")) StartFlip();
+                    if (_flipLeft > 0) { if (Button("Parar voltereta  [" + Settings.P(Settings.KeyStop) + "]")) StopTricks(); }
+                    else if (Button("Hacer voltereta")) StartFlip();
                     break;
                 case 2:
                     Section("TRUCO AEREO  [" + Settings.P(Settings.KeyTrick) + "]");
@@ -1402,7 +1436,8 @@ namespace DutFly
                     Slider("Volteretas", Settings.TrickTurns, 1, 20, "");
                     Slider("Velocidad de volteretas", Settings.TrickSpin, 0.2f, 10, "v/s");
                     Estimate();
-                    if (Button(_trick != 0 ? "Truco en curso..." : "Hacer truco")) StartTrick();
+                    if (_trick != 0) { if (Button("Parar truco  [" + Settings.P(Settings.KeyStop) + "]")) StopTricks(); }
+                    else if (Button("Hacer truco")) StartTrick();
                     break;
                 case 3:
                     Section("MODO ARANA  [" + Settings.P(Settings.KeySpider) + "]");
@@ -1426,6 +1461,33 @@ namespace DutFly
                     Settings.NoLimiters.Value = Switch("Quitar limitadores del juego", Settings.NoLimiters.Value, null);
                     Hint("Escribe en la caja para pasar del maximo del slider.");
                     if (Button("Restaurar auto original")) RestoreCar();
+                    break;
+                case 99:   // pestana Chat oculta
+                    Section("ANIMACIONES EN EL CHAT");
+                    Hint(ChatGif.Ready ? "Cada fotograma es un mensaje. Sin limite: escribe en la caja para pasar del maximo." : "Esperando el chat del juego: entra a una partida o lobby (o escribe algo en el chat).");
+                    Slider("Segundos entre fotogramas", Settings.ChatInterval, 0.05f, 5, "s");
+                    Slider("Repeticiones", Settings.ChatLoops, 1, 100, "");
+                    if (ChatGif.Playing)
+                    {
+                        GUI.Label(new Rect(X, _y, CW, 22), "Enviando: " + ChatGif.Status, Ui.Label);
+                        _y += 26;
+                        if (Button("Parar animacion")) ChatGif.Stop();
+                    }
+                    else
+                    {
+                        Section("ANIMACIONES");
+                        foreach (var (name, frames) in ChatGif.Presets)
+                        {
+                            GUI.Label(new Rect(X, _y + 3, CW - 110, 22), name + "  (" + frames.Length + " fotogramas)", Ui.Label);
+                            if (GUI.Button(new Rect(X + CW - 100, _y, 100, 26), "Enviar", Ui.Key)) ChatGif.Play(name, frames);
+                            _y += 31;
+                        }
+                        Section("PERSONALIZADA (fotogramas separados por |)");
+                        Settings.ChatCustom.Value = GUI.TextField(new Rect(X, _y, CW, 24), Settings.ChatCustom.Value ?? "", Ui.Field);
+                        _y += 30;
+                        if (Button("Enviar personalizada"))
+                            ChatGif.Play("personalizada", (Settings.ChatCustom.Value ?? "").Split('|'));
+                    }
                     break;
                 default:
                     Section("TECLAS");
@@ -1607,6 +1669,192 @@ namespace DutFly
             float.TryParse((s ?? "").Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var f) ? f : 0f;
 
         static string Fmt(float f) => f.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    // ---------------------------------------------------------------- donut ASCII (renderizador propio)
+    // Toro 3D que gira sobre dos ejes. Para cada punto de la superficie se proyecta a la pantalla,
+    // se usa un z-buffer para quedarse con el mas cercano y se elige un caracter segun la luz.
+    static class Donut
+    {
+        const string Ramp = ".,-~:;=!*#$@";   // de oscuro a claro
+        const char Background = '`';           // visible: el chat recorta los espacios
+
+        public static string[] Frames(int count, int width, int height)
+        {
+            var frames = new string[count];
+            const double tube = 1.0, ring = 2.0, dist = 5.0;           // radio del tubo, del anillo y distancia a la camara
+            double scaleX = width * dist * 3.0 / (8.0 * (ring + tube));
+            double scaleY = scaleX * 0.5;                             // los caracteres son mas altos que anchos
+            var lx = 0.0; var ly = 0.7071; var lz = -0.7071;          // direccion de la luz
+
+            for (int f = 0; f < count; f++)
+            {
+                double a = 2 * Math.PI * f / count;        // giro sobre X
+                double b = Math.PI * f / count;            // giro sobre Z (mas lento)
+                double ca = Math.Cos(a), sa = Math.Sin(a), cb = Math.Cos(b), sb = Math.Sin(b);
+                var depth = new double[width * height];
+                var buf = new char[width * height];
+                for (int i = 0; i < buf.Length; i++) buf[i] = Background;
+
+                for (double t = 0; t < 2 * Math.PI; t += 0.07)            // alrededor del tubo
+                {
+                    double ct = Math.Cos(t), st = Math.Sin(t);
+                    for (double p = 0; p < 2 * Math.PI; p += 0.02)        // alrededor del anillo
+                    {
+                        double cp = Math.Cos(p), sp = Math.Sin(p);
+                        double cx = ring + tube * ct, cy = tube * st;      // circulo del tubo antes de girar
+
+                        // punto girado: primero sobre Y (anillo), luego X (a) y Z (b)
+                        double x = cx * (cb * cp + sa * sb * sp) - cy * ca * sb;
+                        double y = cx * (sb * cp - sa * cb * sp) + cy * ca * cb;
+                        double z = dist + ca * cx * sp + cy * sa;
+                        double inv = 1.0 / z;
+
+                        int px = (int)(width / 2.0 + scaleX * inv * x);
+                        int py = (int)(height / 2.0 - scaleY * inv * y);
+                        if (px < 0 || px >= width || py < 0 || py >= height) continue;
+
+                        // normal de la superficie con el mismo giro
+                        double nx = ct * (cb * cp + sa * sb * sp) - st * ca * sb;
+                        double ny = ct * (sb * cp - sa * cb * sp) + st * ca * cb;
+                        double nz = ca * ct * sp + st * sa;
+                        double light = nx * lx + ny * ly + nz * lz;
+                        if (light <= 0) continue;
+
+                        int idx = px + py * width;
+                        if (inv > depth[idx])
+                        {
+                            depth[idx] = inv;
+                            int r = (int)(light * (Ramp.Length - 1) + 0.5);
+                            buf[idx] = Ramp[Math.Min(Ramp.Length - 1, Math.Max(0, r))];
+                        }
+                    }
+                }
+                var sb2 = new System.Text.StringBuilder();
+                for (int row = 0; row < height; row++)
+                {
+                    sb2.Append(buf, row * width, width);
+                    if (row < height - 1) sb2.Append('\n');
+                }
+                frames[f] = sb2.ToString();
+            }
+            return frames;
+        }
+    }
+
+    // ---------------------------------------------------------------- animaciones en el chat
+    // Envia una secuencia de mensajes (un fotograma por mensaje) con un intervalo minimo de 0.05 s
+    // sin tope de fotogramas (el minimo evita que Steam descarte mensajes).
+    static class ChatGif
+    {
+        static Caporta.DriveUpTogether.Chat.SteamChatService _chat;
+        static readonly List<string> _queue = new();
+        static int _index;
+        static float _timer;
+        static string _name;
+
+
+        public static bool Ready => _chat != null;
+        public static bool Playing => _queue.Count > 0;
+        public static string Status => _name + " " + Math.Min(_index + 1, _queue.Count) + "/" + _queue.Count;
+
+        public static readonly (string, string[])[] Presets =
+        {
+            ("Auto corriendo", new[] {
+                "o=>____________________", "____o=>________________", "________o=>____________",
+                "____________o=>________", "________________o=>____", "____________________o=>" }),
+            ("Barra de carga", new[] {
+                "[>.........]  0%", "[==>.......] 20%", "[====>.....] 40%",
+                "[======>...] 60%", "[========>.] 80%", "[==========] 100% LISTO" }),
+            ("Ola", new[] {
+                "~^~_~_~_~_~_~_~_", "_~^~_~_~_~_~_~_~", "~_~^~_~_~_~_~_~_",
+                "_~_~^~_~_~_~_~_~", "~_~_~^~_~_~_~_~_", "_~_~_~^~_~_~_~_~" }),
+            ("Donut girando", Donut.Frames(24, 28, 8)),
+            ("Rickroll", new[] {
+                "Abriendo video_secreto.mp4 ...",
+                "[#.........]  10%  descargando",
+                "[###.......]  30%  descargando",
+                "[######....]  60%  casi...",
+                "[#########.]  90%  un segundo mas...",
+                "[##########] 100%  REPRODUCIENDO >",
+                "~ suena un sintetizador de los 80 ~",
+                @"(bailecito con gabardina) \o/  \o_  _o/",
+                "TE RICKROLLEE  :D" }),
+            ("Corazon latiendo", new[] { "<3", "<3 <3", "<3 <3 <3", "<3 <3", "<3" }),
+            ("Ruleta", new[] { "|", "/", "-", "\\", "|", "/", "-", "\\" }),
+            ("Cohete", new[] {
+                "      /\\      ", "     /__\\     ", "     |  |     ", "    /|__|\\    ",
+                "     /\\/\\     ", "    * DESPEGUE *" }),
+        };
+
+        public static void Patch(Harmony h)
+        {
+            var t = typeof(Caporta.DriveUpTogether.Chat.SteamChatService);
+            foreach (var name in new[] { "Start", "Send", "OnLobbyChatMsg" })
+            {
+                try
+                {
+                    var m = AccessTools.Method(t, name);
+                    if (m == null) continue;
+                    h.Patch(m, prefix: new HarmonyMethod(typeof(ChatGif).GetMethod(nameof(Capture), BindingFlags.Static | BindingFlags.NonPublic)));
+                }
+                catch (Exception e) { Plugin.L.LogWarning($"Chat: no se pudo parchear {name}: {e.Message}"); }
+            }
+        }
+
+        static void Capture(Caporta.DriveUpTogether.Chat.SteamChatService __instance)
+        {
+            try
+            {
+                if (__instance == null || __instance.Pointer == IntPtr.Zero) return;
+                var klass = IL2CPP.il2cpp_object_get_class(__instance.Pointer);
+                var want = Il2CppClassPointerStore<Caporta.DriveUpTogether.Chat.SteamChatService>.NativeClassPtr;
+                if (klass == IntPtr.Zero || !IL2CPP.il2cpp_class_is_assignable_from(want, klass)) return;
+                if (_chat == null) Plugin.L.LogInfo("Chat del juego encontrado.");
+                _chat = __instance;
+            }
+            catch { }
+        }
+
+        public static void Play(string name, string[] frames)
+        {
+            if (_chat == null) { Plugin.L.LogWarning("Chat: todavia no se encontro el chat del juego."); return; }
+            _queue.Clear();
+            int max = 200;
+            try { max = Math.Max(10, Caporta.DriveUpTogether.Chat.SteamChatService.MaxLength); } catch { }
+            int loops = Mathf.Max(1, Mathf.RoundToInt(Settings.ChatLoops.Value));
+            bool multi = false;
+            foreach (var fr in frames) if (fr != null && fr.Contains("\n")) { multi = true; break; }
+            for (int l = 0; l < loops; l++)
+                foreach (var fr in frames)
+                {
+                    foreach (var line in (fr ?? "").Split('\n'))
+                    {
+                        var t = line.TrimEnd('\r');
+                        if (t.Trim().Length == 0) continue;
+                        if (t.Length > max) t = t.Substring(0, max);
+                        _queue.Add(t);
+                    }
+                    if (multi) _queue.Add("~");   // separa un fotograma del siguiente
+                }
+            _index = 0;
+            _timer = 0;
+            _name = name;
+        }
+
+        public static void Stop() { _queue.Clear(); _index = 0; }
+
+        public static void Tick()
+        {
+            if (_queue.Count == 0 || _chat == null) return;
+            _timer -= Time.unscaledDeltaTime;
+            if (_timer > 0) return;
+            _timer = Mathf.Max(0.05f, Settings.ChatInterval.Value);
+            try { _chat.Send(_queue[_index]); }
+            catch (Exception e) { Plugin.L.LogWarning("Chat: no se pudo enviar: " + e.Message); Stop(); return; }
+            _index++;
+            if (_index >= _queue.Count) Stop();
+        }
     }
 
     // ---------------------------------------------------------------- mod de mapas

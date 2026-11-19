@@ -1,4 +1,4 @@
-# FlyMod 0.2.5 Beta — Drive Up Together
+# FlyMod 0.2.6 Beta — Drive Up Together
 
 Mod de BepInEx 6 (IL2CPP) con menú en el juego.
 
@@ -11,6 +11,7 @@ Mod de BepInEx 6 (IL2CPP) con menú en el juego.
 | B | Boost (mantener) |
 | N | Ver al siguiente jugador (espectador) |
 | J | Modo araña: subir por paredes y techos |
+| K | Parar voltereta / truco al instante |
 
 Desde el menú se ajustan: velocidad del fly, velocidad/salto/vueltas de la voltereta, altura/distancia/volteretas/velocidad del truco aéreo (con tiempo estimado), potencia del motor, velocidad máxima, tracción y boost (escribiendo en la caja se puede pasar del máximo del slider), y se reasignan todas las teclas (pestaña Teclas: pulsas el botón y luego la tecla nueva).
 
