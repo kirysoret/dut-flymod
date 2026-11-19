@@ -1,6 +1,6 @@
-version=0.2.1
-notas=Menu nuevo, camara quieta con el menu abierto, voltereta termina horizontal, truco aereo (H) con tiempo estimado
-mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/0ebe2df174637a8d2dc849acdf21cf133d3299a0/FlyMod.dll
-mod_sha256=9D2998DEF133B7F2549A80F60E89DB2A34B4A2DA423892908E7D6A04F63D6C4B
-instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/0ebe2df174637a8d2dc849acdf21cf133d3299a0/FlyModInstaller.exe
-instalador_sha256=C87DD01EC81B4B18A8FEB0855BAD4E33C9C258A934A73D9A7A7FD5434C5C9F25
+version=0.2.3
+notas=Mod de mapas: Infinito (Mod) gratis en la lista, TP, espectador (N), truco con fisica real
+mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/864c717becdd144577c55d0c5ba0a9d550fe0094/FlyMod.dll
+mod_sha256=6AD297371FAFC09786E0EE6E4EFB2ED9F8FA3E8854789426A9DF88FE3BF00E16
+instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/864c717becdd144577c55d0c5ba0a9d550fe0094/FlyModInstaller.exe
+instalador_sha256=308BF0AC667C4B7E9DBB62B824580C1588A46AC6836328B8091A4EAC954D353D
