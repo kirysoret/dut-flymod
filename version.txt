@@ -1,6 +1,6 @@
 version=2.0.0
 notas=Menu movible (Insert), voltereta, boost, potencia, velocidad y traccion
-mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/989800885b948f7bf1fc9424a727ccd7ea4c29ea/FlyMod.dll
+mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/c3f0625eb781c643e600504c467653ff4f3932dd/FlyMod.dll
 mod_sha256=F4FD4228B5A10427EFA537A31674F13D57BA567F1886AFCF63F170E9E00047A5
-instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/989800885b948f7bf1fc9424a727ccd7ea4c29ea/FlyModInstaller.exe
-instalador_sha256=BE8AE9F6DD378BB0F0EBC2D64DB761021E6AA142E78A738A5D1D58598CE20AEF
+instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/c3f0625eb781c643e600504c467653ff4f3932dd/FlyModInstaller.exe
+instalador_sha256=FA9414E368E24B4F1A3CA63A20670F7AE5DA0B71FA006F1B3BE9892F73699C6B
