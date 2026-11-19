@@ -14,7 +14,7 @@ using System.Collections.Generic;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("FlyMod Installer")]
-[assembly: System.Reflection.AssemblyVersion("0.2.3.0")]
+[assembly: System.Reflection.AssemblyVersion("0.2.4.0")]
 
 namespace FlyModInstaller
 {
@@ -297,7 +297,7 @@ namespace FlyModInstaller
             WaitGameClosed();
             Log("Copiando BepInEx + FlyMod en " + game + " ...");
             CopyDir(Path.Combine(Payload, "juego"), game);
-            Log("Instalado. Abre el juego desde Steam y pulsa 8 para el menu. Nuevo mapa: Infinito (Mod) en la lista de mapas.");
+            Log("Instalado. Abre el juego desde Steam y pulsa 8 para el menu. Nuevo mapa: Infinito (Mod) en la lista. Todos los mapas: All cars.");
             Log("Al usar cualquier truco se bloquean leaderboard, logros y recompensas hasta cerrar el juego.");
         }
 

@@ -21,6 +21,8 @@ Con el menú abierto la cámara no se mueve con el mouse.
 
 **Mod de mapas:** agrega el mapa gratis **Infinito (Mod)** a la lista de mapas del juego: piso gris con cuadrícula infinito y nada más. Todos los jugadores de la partida necesitan el mod para jugarlo. En ese mapa nunca se sube puntuación.
 
+**Cualquier auto en cualquier mapa:** todos los mapas pasan a "All cars" (se puede apagar en el menú, pestaña Mapa).
+
 **Al usar cualquier truco se bloquean hasta cerrar el juego:** subida al leaderboard, logros/estadísticas de Steam, recompensas de altura y monedas.
 
 ## Actualización

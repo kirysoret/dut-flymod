@@ -24,10 +24,10 @@ using NWH.WheelController3D;
 
 namespace DutFly
 {
-    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.3")]
+    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.4")]
     public class Plugin : BasePlugin
     {
-        public const string VersionName = "0.2.3 Beta";
+        public const string VersionName = "0.2.4 Beta";
         internal static ManualLogSource L;
         internal static ConfigFile Cfg;
         public static bool UsedThisSession;
@@ -126,7 +126,7 @@ namespace DutFly
         public const float TrickRiseSpeed = 15f; // m/s de subida del truco
         public static ConfigEntry<float> BoostAccel;
         public static ConfigEntry<float> PowerMult, SpeedMult, GripMult;
-        public static ConfigEntry<bool> NoLimiters;
+        public static ConfigEntry<bool> NoLimiters, AnyCarAnyMap;
         public static ConfigEntry<float> WinX, WinY;
 
         public static ConfigEntry<string> KeyMenu, KeyFly, KeyUp, KeyDown, KeyFast, KeyFlip, KeyTrick, KeyBoost, KeySpec;
@@ -150,6 +150,7 @@ namespace DutFly
             SpeedMult = c.Bind("Coche", "VelocidadMax", 1f, "Multiplicador de velocidad maxima (relacion final)");
             GripMult = c.Bind("Coche", "Traccion", 1f, "Multiplicador de agarre de las ruedas");
             NoLimiters = c.Bind("Coche", "SinLimitadores", true, "Apagar los limitadores de velocidad del juego mientras haya trucos activos");
+            AnyCarAnyMap = c.Bind("Mapas", "CualquierAutoEnCualquierMapa", true, "Permitir todas las clases de auto en todos los mapas");
             WinX = c.Bind("Menu", "X", 40f, ""); WinY = c.Bind("Menu", "Y", 80f, "");
 
             KeyMenu = Key(c, "Menu", "Digit8", "Abrir menu");
@@ -1078,6 +1079,12 @@ namespace DutFly
                     Hint("Tus amigos tambien necesitan el mod para jugarlo contigo. En ese mapa nunca se sube puntuacion.");
                     GUI.Label(new Rect(X, _y, CW, 22), MapMod.IsActive ? "Estado: estas en " + MapMod.DisplayName : "Estado: no estas en el mapa", Ui.Label);
                     _y += 28;
+                    Section("AUTOS");
+                    {
+                        bool v = Switch("Cualquier auto en cualquier mapa", Settings.AnyCarAnyMap.Value, null);
+                        if (v != Settings.AnyCarAnyMap.Value) { Settings.AnyCarAnyMap.Value = v; MapMod.ForceRefresh(); }
+                    }
+                    Hint(MapMod.CarClassesInfo);
                     break;
                 case 0:
                     Section("VUELO");
@@ -1347,6 +1354,7 @@ namespace DutFly
                 var cat = settings.Catalog;
                 if (!Is<MapCatalog>(cat)) return;
                 bool added = Ensure(cat);
+                ApplyCarClasses(cat);
                 if (added && __instance._built)
                 {
                     // las filas se hicieron sin nuestro mapa: borrarlas para que el juego las rehaga
@@ -1393,9 +1401,46 @@ namespace DutFly
             try
             {
                 foreach (var cat in Resources.FindObjectsOfTypeAll<MapCatalog>())
-                    if (Is<MapCatalog>(cat)) Ensure(cat);
+                    if (Is<MapCatalog>(cat)) { Ensure(cat); ApplyCarClasses(cat); }
             }
             catch (Exception e) { Plugin.L.LogWarning("Mapas: " + e.Message); }
+        }
+
+        // ---------- cualquier auto en cualquier mapa
+        // El juego trata una lista allowedCarClasses VACIA como "All cars". Se vacia la lista de cada
+        // mapa (y se guarda la original para poder volver). Solo cambia datos; no parchea funciones.
+        static readonly Dictionary<IntPtr, List<string>> _origClasses = new();
+        public static string CarClassesInfo = "Todos los mapas muestran \"All cars\".";
+        public static void ForceRefresh() => _searchTimer = 0;
+
+        static void ApplyCarClasses(MapCatalog cat)
+        {
+            var maps = cat.maps;
+            if (maps == null) return;
+            for (int i = 0; i < maps.Count; i++)
+            {
+                var m = maps[i];
+                if (!Is<MapDefinition>(m)) continue;
+                var l = m.allowedCarClasses;
+                if (l == null) continue;
+                if (!_origClasses.ContainsKey(m.Pointer))
+                {
+                    var copy = new List<string>();
+                    for (int k = 0; k < l.Count; k++) copy.Add(l[k]);
+                    _origClasses[m.Pointer] = copy;
+                }
+                if (Settings.AnyCarAnyMap.Value)
+                {
+                    if (l.Count > 0) l.Clear();          // vacia = "All cars"
+                }
+                else if (l.Count == 0 && _origClasses.TryGetValue(m.Pointer, out var orig) && orig.Count > 0)
+                {
+                    foreach (var c in orig) l.Add(c);    // volver a la lista original
+                }
+            }
+            CarClassesInfo = Settings.AnyCarAnyMap.Value
+                ? "Todos los mapas muestran \"All cars\"."
+                : "Cada mapa usa sus autos originales.";
         }
 
         // devuelve true si lo acaba de agregar a este catalogo
