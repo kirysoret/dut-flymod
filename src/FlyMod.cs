@@ -24,10 +24,10 @@ using NWH.WheelController3D;
 
 namespace DutFly
 {
-    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.4")]
+    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.5")]
     public class Plugin : BasePlugin
     {
-        public const string VersionName = "0.2.4.1 Beta";
+        public const string VersionName = "0.2.5.0 Beta";
         internal static ManualLogSource L;
         internal static ConfigFile Cfg;
         public static bool UsedThisSession;
@@ -126,10 +126,13 @@ namespace DutFly
         public const float TrickRiseSpeed = 15f; // m/s de subida del truco
         public static ConfigEntry<float> BoostAccel;
         public static ConfigEntry<float> PowerMult, SpeedMult, GripMult;
-        public static ConfigEntry<bool> NoLimiters, AnyCarAnyMap;
+        public static ConfigEntry<bool> NoLimiters, AnyCarAnyMap, RgbCar, CubeCar;
+        public static ConfigEntry<float> RgbSpeed;
+        public static ConfigEntry<bool> Spider;
+        public static ConfigEntry<float> SpiderStick, SpiderTurn, SpiderReach;
         public static ConfigEntry<float> WinX, WinY;
 
-        public static ConfigEntry<string> KeyMenu, KeyFly, KeyUp, KeyDown, KeyFast, KeyFlip, KeyTrick, KeyBoost, KeySpec;
+        public static ConfigEntry<string> KeyMenu, KeyFly, KeyUp, KeyDown, KeyFast, KeyFlip, KeyTrick, KeyBoost, KeySpec, KeySpider;
         public static readonly List<(string label, ConfigEntry<string> entry)> Binds = new();
 
         public static void Bind(ConfigFile c)
@@ -151,6 +154,13 @@ namespace DutFly
             GripMult = c.Bind("Coche", "Traccion", 1f, "Multiplicador de agarre de las ruedas");
             NoLimiters = c.Bind("Coche", "SinLimitadores", true, "Apagar los limitadores de velocidad del juego mientras haya trucos activos");
             AnyCarAnyMap = c.Bind("Mapas", "CualquierAutoEnCualquierMapa", true, "Permitir todas las clases de auto en todos los mapas");
+            RgbCar = c.Bind("Estilo", "ColorRGB", false, "El auto cambia de color como RGB (lo ven todos)");
+            RgbSpeed = c.Bind("Estilo", "VelocidadRGB", 0.25f, "Vueltas al arcoiris por segundo");
+            CubeCar = c.Bind("Estilo", "AutoCubo", false, "Tu auto se ve como un cubo (solo en tu pantalla)");
+            Spider = c.Bind("Arana", "Activo", false, "Modo arana: el auto sube por paredes y techos");
+            SpiderStick = c.Bind("Arana", "Agarre", 1.5f, "Fuerza que lo pega a la superficie (en gravedades)");
+            SpiderTurn = c.Bind("Arana", "RapidezGiro", 4f, "Que tan rapido se inclina hacia la pared");
+            SpiderReach = c.Bind("Arana", "Alcance", 4f, "Distancia a la que empieza a inclinarse hacia una pared (m)");
             WinX = c.Bind("Menu", "X", 40f, ""); WinY = c.Bind("Menu", "Y", 80f, "");
 
             KeyMenu = Key(c, "Menu", "Digit8", "Abrir menu");
@@ -162,6 +172,7 @@ namespace DutFly
             KeyTrick = Key(c, "TrucoAereo", "H", "Truco aereo");
             KeyBoost = Key(c, "Boost", "B", "Boost (mantener)");
             KeySpec = Key(c, "Espectar", "N", "Ver siguiente jugador");
+            KeySpider = Key(c, "Arana", "J", "Modo arana on/off");
         }
 
         // nombre legible de la tecla (Digit8 -> 8)
@@ -281,18 +292,21 @@ namespace DutFly
             if (Down(Settings.KeyFlip)) StartFlip();
             if (Down(Settings.KeyTrick)) StartTrick();
             if (Down(Settings.KeySpec)) SpectateNext();
+            if (Down(Settings.KeySpider)) { Settings.Spider.Value = !Settings.Spider.Value; Plugin.Cfg.Save(); }
 
             _othersTimer -= Time.unscaledDeltaTime;
             if (_othersTimer <= 0) { _othersTimer = 1f; RefreshOthers(); }
 
             MapMod.Tick();
 
+            StyleTick();
+
             _tuneTimer -= Time.unscaledDeltaTime;
             if (_tuneTimer <= 0) { _tuneTimer = 0.25f; ApplyTuning(); }
 
             bool speedCheats = Settings.PowerMult.Value > 1.001f || Settings.SpeedMult.Value > 1.001f
                                || Held(Settings.KeyBoost) || _flipLeft > 0;
-            Plugin.Unlimited = _flying || _trick != 0 || (Settings.NoLimiters.Value && speedCheats);
+            Plugin.Unlimited = _flying || _trick != 0 || _spiderActive || (Settings.NoLimiters.Value && speedCheats);
         }
 
         void SetMenu(bool open)
@@ -486,6 +500,220 @@ namespace DutFly
                 _rb.linearVelocity = Vector3.zero;   // y lo suelta: cae con la gravedad
             }
             _trick = 0;
+        }
+
+        // ---------- modo arana
+        // Rayo hacia abajo del auto (superficie que pisa) y hacia adelante (pared que se acerca).
+        // La "normal objetivo" se mezcla hacia la pared segun lo cerca que este: el auto se va
+        // inclinando poco a poco. La gravedad tira hacia la superficie que pisa en vez de hacia abajo.
+        // El giro sobre su propio eje (volante) se conserva.
+        bool _spiderActive, _spiderSurface, _spiderPrevGravity = true;
+        Vector3 _spiderNormal = Vector3.up;
+        float _spiderAir;
+
+        // primer impacto que no sea del propio auto
+        bool CastSurface(Vector3 origin, Vector3 dir, float len, out RaycastHit best)
+        {
+            best = default;
+            bool found = false;
+            float bestD = float.MaxValue;
+            foreach (var h in Physics.RaycastAll(origin, dir, len, ~0, QueryTriggerInteraction.Ignore))
+            {
+                var col = h.collider;
+                if (col == null) continue;
+                if (col.attachedRigidbody != null && col.attachedRigidbody.Pointer == _rb.Pointer) continue;
+                if (h.distance < bestD) { bestD = h.distance; best = h; found = true; }
+            }
+            return found;
+        }
+
+        void SpiderStep()
+        {
+            if (!Settings.Spider.Value) return;
+            if (_rb == null) { _rb = FindLocalBody(); if (_rb == null) return; }
+            float dt = Time.fixedDeltaTime;
+            var t = _rb.transform;
+            Vector3 com = _rb.worldCenterOfMass;
+
+            if (!_spiderActive)
+            {
+                _spiderActive = true;
+                _spiderPrevGravity = _rb.useGravity;
+                _spiderNormal = t.up;
+                Plugin.MarkUsed("modo arana");
+            }
+
+            // superficie que pisa
+            bool down = CastSurface(com, -t.up, 2.5f, out var dh);
+            Vector3 target = down ? dh.normal : _spiderNormal;
+
+            // pared que se acerca (en la direccion en que avanza)
+            Vector3 vel = _rb.linearVelocity;
+            Vector3 along = Vector3.ProjectOnPlane(vel, t.up);
+            Vector3 fwd = along.sqrMagnitude > 1f ? along.normalized : t.forward;
+            float reach = Mathf.Max(0.5f, Settings.SpiderReach.Value) + along.magnitude * 0.15f;
+            if (CastSurface(com, fwd, reach, out var fh))
+            {
+                float ang = Vector3.Angle(fh.normal, target);
+                if (ang > 25f)
+                {
+                    float k = 1f - Mathf.Clamp01(fh.distance / reach);   // 0 lejos -> 1 pegado
+                    target = Vector3.Slerp(target, fh.normal, k).normalized;
+                }
+            }
+
+            if (down) { _spiderAir = 0; _spiderSurface = true; }
+            else
+            {
+                _spiderAir += dt;
+                if (_spiderAir > 0.6f)
+                {
+                    // en el aire: volver poco a poco a la gravedad normal
+                    _spiderSurface = false;
+                    target = Vector3.up;
+                }
+            }
+            _spiderNormal = Vector3.Slerp(_spiderNormal, target, Mathf.Clamp01(dt * Mathf.Max(0.1f, Settings.SpiderTurn.Value) * 2f)).normalized;
+
+            // gravedad hacia la superficie
+            _rb.useGravity = false;
+            _rb.AddForce(-_spiderNormal * (Gravity * Mathf.Max(0.1f, _spiderSurface ? Settings.SpiderStick.Value : 1f)), ForceMode.Acceleration);
+
+            // inclinar el auto hacia la normal conservando su giro con el volante
+            Quaternion want = Quaternion.FromToRotation(t.up, _spiderNormal) * _rb.rotation;
+            Vector3 align = AngularTo(want, Mathf.Max(0.1f, Settings.SpiderTurn.Value));
+            Vector3 w = _rb.angularVelocity;
+            Vector3 yaw = Vector3.Project(w, t.up);
+            _rb.angularVelocity = yaw + align;
+        }
+
+        void SpiderRelease()
+        {
+            _spiderActive = false;
+            _spiderSurface = false;
+            if (_rb != null) _rb.useGravity = _spiderPrevGravity;
+        }
+
+        // ---------- estilo del auto
+        // RGB: se pinta la carroceria con el sistema del juego (VehicleCustomizationApplicator).
+        //   En tu pantalla cada fotograma (ApplyLocal) y por red ~10 veces por segundo (_networkBodyColor),
+        //   asi lo ven todos. Al apagarlo se devuelve el color original.
+        // Cubo: oculta los modelos de tu auto y pone un cubo del mismo tamano (solo visual y solo local).
+        Caporta.DriveUpTogether.VehicleCustomizationApplicator _paint;
+        IntPtr _paintVeh;
+        bool _rgbOn, _hasOrigColor, _netWriteFailed;
+        Color32 _origColor;
+        float _hue, _netTimer;
+        GameObject _cube;
+        IntPtr _cubeVeh;
+        readonly List<Renderer> _cubeHidden = new();
+
+        void StyleTick()
+        {
+            var veh = LocalVehicle();
+            IntPtr vp = veh == null ? IntPtr.Zero : veh.Pointer;
+
+            // ---- RGB
+            if (vp != _paintVeh) { _paint = null; _paintVeh = vp; _hasOrigColor = false; _rgbOn = false; }
+            if (veh != null && _paint == null)
+                try { _paint = veh.GetComponentInChildren<Caporta.DriveUpTogether.VehicleCustomizationApplicator>(); } catch { }
+
+            if (Settings.RgbCar.Value && _paint != null)
+            {
+                if (!_rgbOn)
+                {
+                    try { _origColor = _paint._networkBodyColor.Value; _hasOrigColor = true; } catch { }
+                    _rgbOn = true;
+                    Plugin.MarkUsed("color rgb");
+                }
+                _hue = (_hue + Time.unscaledDeltaTime * Mathf.Max(0.01f, Settings.RgbSpeed.Value)) % 1f;
+                Color c = Color.HSVToRGB(_hue, 0.85f, 1f);
+                Vector4 finish = Vector4.zero;
+                try { finish = _paint._networkFinish.Value; } catch { }
+                try { _paint.ApplyLocal(c, finish); } catch { }
+                _netTimer -= Time.unscaledDeltaTime;
+                if (_netTimer <= 0 && !_netWriteFailed)
+                {
+                    _netTimer = 0.1f;
+                    try { _paint._networkBodyColor.Value = (Color32)c; }
+                    catch (Exception e) { _netWriteFailed = true; Plugin.L.LogWarning("Color RGB solo local (la red no lo permite): " + e.Message); }
+                }
+                if (_cube != null) SetCubeColor(c);
+            }
+            else if (_rgbOn)
+            {
+                _rgbOn = false;
+                if (_paint != null && _hasOrigColor)
+                {
+                    Vector4 finish = Vector4.zero;
+                    try { finish = _paint._networkFinish.Value; } catch { }
+                    try { _paint.ApplyLocal(_origColor, finish); } catch { }
+                    try { if (!_netWriteFailed) _paint._networkBodyColor.Value = _origColor; } catch { }
+                }
+            }
+
+            // ---- cubo
+            bool wantCube = Settings.CubeCar.Value && veh != null;
+            if (_cube != null && (!wantCube || vp != _cubeVeh)) RemoveCube();
+            if (wantCube && _cube == null) MakeCube(veh);
+        }
+
+        void MakeCube(Caporta.DriveUpTogether.Vehicle veh)
+        {
+            try
+            {
+                var rends = veh.GetComponentsInChildren<Renderer>();
+                bool any = false;
+                Bounds b = new Bounds(veh.transform.position, Vector3.one);
+                _cubeHidden.Clear();
+                foreach (var r in rends)
+                {
+                    if (r == null || !r.enabled) continue;
+                    if (!any) { b = r.bounds; any = true; } else b.Encapsulate(r.bounds);
+                    r.enabled = false;
+                    _cubeHidden.Add(r);
+                }
+                var t = veh.transform;
+                _cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                _cube.name = "FlyModAutoCubo";
+                var col = _cube.GetComponent<Collider>();
+                if (col != null) UnityEngine.Object.Destroy(col);     // solo visual: la fisica sigue siendo la del auto
+                _cube.transform.SetParent(t, false);
+                // tamano: el mayor lado de la caja del auto, para que sea un cubo de verdad
+                Vector3 local = t.InverseTransformVector(b.size);
+                float side = Mathf.Max(Mathf.Abs(local.x), Mathf.Abs(local.y), Mathf.Abs(local.z));
+                side = Mathf.Clamp(side * 0.75f, 1f, 8f);
+                _cube.transform.localScale = Vector3.one * side;
+                _cube.transform.position = b.center;
+                _cube.transform.localRotation = Quaternion.identity;
+                var r2 = _cube.GetComponent<Renderer>();
+                Shader sh = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Universal Render Pipeline/Unlit");
+                if (r2 != null && sh != null) r2.material = new Material(sh);
+                SetCubeColor(Ui.Accent);
+                _cubeVeh = veh.Pointer;
+                Plugin.L.LogInfo($"Auto cubo: {_cubeHidden.Count} piezas ocultas, lado {side:0.0} m");
+            }
+            catch (Exception e) { Plugin.L.LogWarning("No se pudo hacer el auto cubo: " + e.Message); }
+        }
+
+        void SetCubeColor(Color c)
+        {
+            try
+            {
+                var m = _cube.GetComponent<Renderer>().material;
+                m.color = c;
+                if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
+            }
+            catch { }
+        }
+
+        void RemoveCube()
+        {
+            foreach (var r in _cubeHidden) { try { if (r != null) r.enabled = true; } catch { } }
+            _cubeHidden.Clear();
+            try { if (_cube != null) UnityEngine.Object.Destroy(_cube); } catch { }
+            _cube = null;
+            _cubeVeh = IntPtr.Zero;
         }
 
         // ---------- otros jugadores
@@ -883,6 +1111,8 @@ namespace DutFly
             if (_flying) FlyStep();
             else if (_trick != 0) TrickStep();
             else if (_flipLeft > 0) FlipStep();
+            else SpiderStep();
+            if ((_flying || _trick != 0 || _flipLeft > 0 || !Settings.Spider.Value) && _spiderActive) SpiderRelease();
 
             if (!_flying && _trick == 0 && Held(Settings.KeyBoost))
             {
@@ -1027,7 +1257,7 @@ namespace DutFly
 
             // aviso arriba a la izquierda
             bool boosting = Held(Settings.KeyBoost) && !_flying;
-            string chip = _flying ? "FLY" : _trick != 0 ? "TRUCO AEREO" : boosting ? "BOOST" : null;
+            string chip = _flying ? "FLY" : _trick != 0 ? "TRUCO AEREO" : boosting ? "BOOST" : (_spiderActive && _spiderSurface) ? "ARANA" : null;
             if (_specTarget != null) chip = "VIENDO: " + _specName + "  [" + Settings.P(Settings.KeySpec) + " siguiente]";
             float hx = 12;
             if (chip != null) { Ui.Chip(new Rect(hx, 12, 0, 24), chip, Ui.Accent, Ui.Dark); hx += Ui.ChipWidth(chip) + 6; }
@@ -1137,6 +1367,7 @@ namespace DutFly
                     Slider("Velocidad de giro", Settings.FlipSpin, 1, 40, "rad/s");
                     Slider("Salto", Settings.FlipHop, 0, 50, "m/s");
                     Slider("Vueltas", Settings.FlipTurns, 0.5f, 10, "");
+                    FlipEstimate();
                     if (Button("Hacer voltereta")) StartFlip();
                     break;
                 case 2:
@@ -1150,6 +1381,18 @@ namespace DutFly
                     if (Button(_trick != 0 ? "Truco en curso..." : "Hacer truco")) StartTrick();
                     break;
                 case 3:
+                    Section("MODO ARANA  [" + Settings.P(Settings.KeySpider) + "]");
+                    Settings.Spider.Value = Switch("Subir por paredes y techos", Settings.Spider.Value, null);
+                    if (Settings.Spider.Value)
+                    {
+                        Slider("Agarre", Settings.SpiderStick, 0.5f, 5, "g");
+                        Slider("Rapidez al inclinarse", Settings.SpiderTurn, 0.5f, 15, "");
+                        Slider("Alcance hacia la pared", Settings.SpiderReach, 1, 15, "m");
+                    }
+                    Section("ESTILO");
+                    Settings.RgbCar.Value = Switch("Color RGB (lo ven todos)", Settings.RgbCar.Value, null);
+                    if (Settings.RgbCar.Value) Slider("Velocidad RGB", Settings.RgbSpeed, 0.02f, 3, "v/s");
+                    Settings.CubeCar.Value = Switch("Auto cubo (solo en tu pantalla)", Settings.CubeCar.Value, null);
                     Section("MOTOR Y RUEDAS");
                     Slider("Potencia", Settings.PowerMult, 0.5f, 50, "x");
                     Slider("Velocidad maxima", Settings.SpeedMult, 0.5f, 10, "x");
@@ -1276,13 +1519,42 @@ namespace DutFly
         void Estimate()
         {
             var (up, spin, fall) = TrickTimes();
-            string F(float f) => f.ToString("0.0", CultureInfo.InvariantCulture);
+            TimeBox(up + spin + fall, "subida " + Dur(up) + "  +  volteretas " + Dur(spin) + "  +  caida " + Dur(fall));
+        }
+
+        // voltereta: tiempo girando y tiempo en el aire por el salto
+        void FlipEstimate()
+        {
+            float spinT = Mathf.Max(0.1f, Settings.FlipTurns.Value) * 2f * Mathf.PI / Mathf.Max(0.5f, Settings.FlipSpin.Value);
+            float airT = 2f * Mathf.Max(0f, Settings.FlipHop.Value) / Gravity;
+            TimeBox(Mathf.Max(spinT, airT), "giro " + Dur(spinT) + "   |   en el aire " + Dur(airT));
+        }
+
+        void TimeBox(float total, string detail)
+        {
             var box = new Rect(X, _y + 2, CW, 40);
             GUI.DrawTexture(box, Ui.TexField);
-            GUI.Label(new Rect(X + 10, _y + 4, CW - 20, 20), "Tiempo estimado:  " + F(up + spin + fall) + " s", Ui.Label);
-            GUI.Label(new Rect(X + 10, _y + 22, CW - 20, 18),
-                "subida " + F(up) + " s  +  volteretas " + F(spin) + " s  +  caida " + F(fall) + " s", Ui.Hint);
+            GUI.Label(new Rect(X + 10, _y + 4, CW - 20, 20), "Tiempo estimado:  " + Dur(total), Ui.Label);
+            GUI.Label(new Rect(X + 10, _y + 22, CW - 20, 18), detail, Ui.Hint);
             _y += 50;
+        }
+
+        // 4.1 s | 1 minuto | 1h y 1 minuto | 1d, 2h y 5 minutos ...
+        public static string Dur(float seconds)
+        {
+            if (float.IsNaN(seconds) || float.IsInfinity(seconds)) return "-";
+            if (seconds < 60f) return seconds.ToString("0.0", CultureInfo.InvariantCulture) + " s";
+            long t = (long)Math.Round(seconds);
+            long d = t / 86400; t %= 86400;
+            long h = t / 3600; t %= 3600;
+            long m = t / 60; long sec = t % 60;
+            var parts = new List<string>();
+            if (d > 0) parts.Add(d + "d");
+            if (h > 0) parts.Add(h + "h");
+            if (m > 0) parts.Add(m + (m == 1 ? " minuto" : " minutos"));
+            if (sec > 0) parts.Add(sec + " s");
+            if (parts.Count == 1) return parts[0];
+            return string.Join(", ", parts.GetRange(0, parts.Count - 1)) + " y " + parts[parts.Count - 1];
         }
 
         // lista de jugadores (con un boton por fila)

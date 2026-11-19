@@ -1,4 +1,4 @@
-# FlyMod 0.2 Beta — Drive Up Together
+# FlyMod 0.2.5 Beta — Drive Up Together
 
 Mod de BepInEx 6 (IL2CPP) con menú en el juego.
 
@@ -10,6 +10,7 @@ Mod de BepInEx 6 (IL2CPP) con menú en el juego.
 | H | Truco aéreo: sube, da volteretas avanzando y cae horizontal |
 | B | Boost (mantener) |
 | N | Ver al siguiente jugador (espectador) |
+| J | Modo araña: subir por paredes y techos |
 
 Desde el menú se ajustan: velocidad del fly, velocidad/salto/vueltas de la voltereta, altura/distancia/volteretas/velocidad del truco aéreo (con tiempo estimado), potencia del motor, velocidad máxima, tracción y boost (escribiendo en la caja se puede pasar del máximo del slider), y se reasignan todas las teclas (pestaña Teclas: pulsas el botón y luego la tecla nueva).
 
@@ -20,6 +21,12 @@ Con el menú abierto la cámara no se mueve con el mouse.
 **Espectador:** la cámara se pone detrás del coche de otro jugador (mouse para girar, rueda para acercar); si se reinicia, lo sigue.
 
 **Mod de mapas:** agrega el mapa gratis **Infinito (Mod)** a la lista de mapas del juego: piso gris con cuadrícula infinito y nada más. Todos los jugadores de la partida necesitan el mod para jugarlo. En ese mapa nunca se sube puntuación.
+
+**Modo araña (J):** al acercarse a una pared el auto se inclina poco a poco hasta pegarse; la gravedad tira hacia la superficie que pisa, así sube paredes y techos.
+
+**Estilo:** color RGB que ven todos, y auto cubo (solo en tu pantalla).
+
+**Tiempo estimado** en Flip y Truco, en s / minutos / h / d.
 
 **Cualquier auto en cualquier mapa:** todos los mapas pasan a "All cars" (se puede apagar en el menú, pestaña Mapa).
 
