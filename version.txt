@@ -1,6 +1,6 @@
-version=0.2.4
-notas=Cualquier auto en cualquier mapa (All cars)
-mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/9b80a9f5847b3bd8ff4ff58a27c7852363196f58/FlyMod.dll
-mod_sha256=67814427A5A4A0F3EAA8FED7C823A0E166409F2C1F365D9336244EC9B45963AB
-instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/9b80a9f5847b3bd8ff4ff58a27c7852363196f58/FlyModInstaller.exe
-instalador_sha256=CE15D6E434F9C39B203AC765E7618F58959D448611E9835B0D9D57A5495DDDF2
+version=0.2.4.1
+notas=Fix: el truco aereo sube a la altura exacta, gira arriba y cae (ya no sale volando)
+mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/c1731e43874546d18d040af257aa45cc70ab0d25/FlyMod.dll
+mod_sha256=656629848C5554E7C44CAFAC6AFCABE4D338C3691E1A27AD0B3D1436EEC70445
+instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/c1731e43874546d18d040af257aa45cc70ab0d25/FlyModInstaller.exe
+instalador_sha256=9F3E7003960DA80A773B64B221BC96E8DB353005619A59480359CB3B26E13BE1
