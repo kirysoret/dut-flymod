@@ -28,6 +28,7 @@ namespace FlyModInstaller
         static void Main(string[] args)
         {
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            try { var old = Application.ExecutablePath + ".old"; if (File.Exists(old)) File.Delete(old); } catch { }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm(args));
@@ -112,7 +113,7 @@ namespace FlyModInstaller
             var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var line in text.Split('\n'))
             {
-                var m = Regex.Match(line, @"^\s*([A-Za-z_]+)\s*=\s*(.+?)\s*$");
+                var m = Regex.Match(line, @"^\s*([A-Za-z0-9_]+)\s*=\s*(.+?)\s*$");
                 if (m.Success) d[m.Groups[1].Value] = m.Groups[2].Value;
             }
             return d;
@@ -266,11 +267,13 @@ namespace FlyModInstaller
                     wc.DownloadFile(url, exe);
                     if (!string.IsNullOrEmpty(sha2) && !string.Equals(Sha256(exe), sha2, StringComparison.OrdinalIgnoreCase))
                         throw new Exception("El instalador descargado no coincide con el hash publicado.");
-                    // reemplazar el exe cuando este proceso se cierre y volver a abrirlo
+                    // Windows deja renombrar un exe en uso: se aparta el viejo y se pone el nuevo en su lugar
                     var me = Application.ExecutablePath;
-                    var cmd = "/c timeout /t 2 /nobreak >nul & move /y \"" + exe + "\" \"" + me + "\" >nul & start \"\" \"" + me + "\"";
-                    Process.Start(new ProcessStartInfo("cmd.exe", cmd) { CreateNoWindow = true, UseShellExecute = false });
-                    Invoke(new Action(() => { MessageBox.Show(this, "Actualizado a " + v + ". El instalador se reiniciara.", "FlyMod"); Close(); }));
+                    var old = me + ".old";
+                    if (File.Exists(old)) File.Delete(old);
+                    File.Move(me, old);
+                    File.Move(exe, me);
+                    Invoke(new Action(() => { MessageBox.Show(this, "Actualizado a " + v + ". El instalador se reiniciara.", "FlyMod"); Process.Start(me); Close(); }));
                     return;
                 }
             }
