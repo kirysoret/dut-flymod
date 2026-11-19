@@ -1,6 +1,6 @@
-version=0.2.5.0
-notas=Modo arana (J), color RGB, auto cubo, tiempo estimado en Flip y tiempos en min/h/d
-mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/87093e947bb342e4eda6dcc6b53edcb660a6d97f/FlyMod.dll
-mod_sha256=F53462E95F6B24771392A2495B6F52DD755AB9E5C79DB3B25F1A68A6A1DE8605
-instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/87093e947bb342e4eda6dcc6b53edcb660a6d97f/FlyModInstaller.exe
-instalador_sha256=5B3A10AA92BF2B9DD7577360357E775381CF6EC1A7B54FB4E59D8E6817785860
+version=0.2.5.1
+notas=Fix: la gravedad ya no se queda apagada; Restaurar auto original deja todo de fabrica
+mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/e47ab097402388e30deb23cf210c51a3a0cdab2f/FlyMod.dll
+mod_sha256=0271954D96A2B5895210C221A0FEAA82E200A9078BE7D0DEA7356BB0F803ACFA
+instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/e47ab097402388e30deb23cf210c51a3a0cdab2f/FlyModInstaller.exe
+instalador_sha256=458EA40331992BEAF1BED3D651422A0A056C59FC73C573C0DB886309BFDD2CE8
