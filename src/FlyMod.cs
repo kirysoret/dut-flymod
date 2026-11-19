@@ -19,7 +19,7 @@ using NWH.WheelController3D;
 
 namespace DutFly
 {
-    [BepInPlugin("local.dut.flymod", "FlyMod", "2.0.0")]
+    [BepInPlugin("local.dut.flymod", "FlyMod", "2.0.1")]
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource L;
@@ -33,6 +33,7 @@ namespace DutFly
             Cfg = Config;
             Cfg.SaveOnConfigSet = false;
             Settings.Bind(Cfg);
+            Cfg.Save(); // crea el .cfg con los valores por defecto
 
             ClassInjector.RegisterTypeInIl2Cpp<FlyBehaviour>();
             AddComponent<FlyBehaviour>();
@@ -58,7 +59,7 @@ namespace DutFly
             PatchAll(h, typeof(Caporta.DriveUpTogether.Gameplay.Surfaces.VehicleLaunchGuard), unlimited, "FixedUpdate");
             PatchAll(h, typeof(Caporta.DriveUpTogether.VehicleSpeedGovernor), unlimited, "Limit");
 
-            L.LogInfo($"FlyMod 2 cargado. {Settings.KeyMenu.Value} = menu.");
+            L.LogInfo($"FlyMod 2 cargado. {Settings.P(Settings.KeyMenu)} = menu.");
         }
 
         static HarmonyMethod Prefix(string name) =>
@@ -124,14 +125,14 @@ namespace DutFly
             FlipHop = c.Bind("Flip", "Salto", 8f, "Impulso hacia arriba al empezar la voltereta (m/s)");
             FlipTurns = c.Bind("Flip", "Vueltas", 1f, "Numero de vueltas completas");
             FlipBackwards = c.Bind("Flip", "HaciaAtras", false, "Back flip en vez de front flip");
-            BoostAccel = c.Bind("Coche", "Boost", 30f, "Aceleracion extra mientras mantienes la tecla de boost (m/s2)");
+            BoostAccel = c.Bind("Coche", "Boost", 60f, "Aceleracion extra mientras mantienes la tecla de boost (m/s2)");
             PowerMult = c.Bind("Coche", "Potencia", 1f, "Multiplicador de potencia del motor");
             SpeedMult = c.Bind("Coche", "VelocidadMax", 1f, "Multiplicador de velocidad maxima (relacion final)");
             GripMult = c.Bind("Coche", "Traccion", 1f, "Multiplicador de agarre de las ruedas");
             NoLimiters = c.Bind("Coche", "SinLimitadores", true, "Apagar los limitadores de velocidad del juego mientras haya trucos activos");
             WinX = c.Bind("Menu", "X", 40f, ""); WinY = c.Bind("Menu", "Y", 80f, "");
 
-            KeyMenu = Key(c, "Menu", "Insert", "Abrir menu");
+            KeyMenu = Key(c, "Menu", "Digit8", "Abrir menu");
             KeyFly = Key(c, "Fly", "F8", "Fly on/off");
             KeyUp = Key(c, "FlySubir", "Space", "Fly: subir");
             KeyDown = Key(c, "FlyBajar", "LeftCtrl", "Fly: bajar");
@@ -139,6 +140,10 @@ namespace DutFly
             KeyFlip = Key(c, "Flip", "G", "Voltereta");
             KeyBoost = Key(c, "Boost", "B", "Boost (mantener)");
         }
+
+        // nombre legible de la tecla (Digit8 -> 8)
+        public static string P(ConfigEntry<string> e) =>
+            e.Value.StartsWith("Digit") ? e.Value.Substring(5) : e.Value.StartsWith("Numpad") ? "Num " + e.Value.Substring(6) : e.Value;
 
         static ConfigEntry<string> Key(ConfigFile c, string name, string def, string label)
         {
@@ -174,6 +179,7 @@ namespace DutFly
         float _basePower, _lastPower, _baseGear, _lastGear;
         float[] _baseLong, _baseLat, _lastLong, _lastLat;
         float _tuneTimer;
+        bool _boostLogged;
 
         void Awake()
         {
@@ -292,7 +298,9 @@ namespace DutFly
                 if (_rb == null) _rb = FindLocalBody();
                 if (_rb != null)
                 {
-                    _rb.AddForce(_rb.transform.forward * Settings.BoostAccel.Value, ForceMode.Acceleration);
+                    // empuje directo sobre la velocidad (no depende de fuerzas que el juego pueda anular)
+                    _rb.linearVelocity += _rb.transform.forward * (Settings.BoostAccel.Value * Time.fixedDeltaTime);
+                    if (!_boostLogged) { _boostLogged = true; Plugin.L.LogInfo("Boost activo."); }
                     Plugin.MarkUsed("boost");
                 }
             }
@@ -418,10 +426,12 @@ namespace DutFly
         // ---------- GUI
         void OnGUI()
         {
-            string status = _flying ? "FLY ON" : null;
+            bool boosting = Held(Settings.KeyBoost) && !_flying;
+            string status = _flying ? "FLY ON" : boosting ? "BOOST" : null;
+            if (boosting && !Plugin.UsedThisSession) GUI.Label(new Rect(10, 10, 200, 25), "BOOST");
             if (Plugin.UsedThisSession)
                 GUI.Label(new Rect(10, 10, 600, 25), (status != null ? status + "  |  " : "") + "Leaderboard/logros bloqueados (reinicia el juego para jugar legal)");
-            if (_menuOpen) _win = GUI.Window(73195, _win, _winFn, "FlyMod  (" + Settings.KeyMenu.Value + " cerrar)");
+            if (_menuOpen) _win = GUI.Window(73195, _win, _winFn, "FlyMod  (" + Settings.P(Settings.KeyMenu) + " cerrar)");
         }
 
         float _y;
@@ -438,13 +448,13 @@ namespace DutFly
 
             if (_tab == 0)
             {
-                bool nf = GUI.Toggle(new Rect(X, _y, W, LH), _flying, " Fly activo (" + Settings.KeyFly.Value + ")");
+                bool nf = GUI.Toggle(new Rect(X, _y, W, LH), _flying, " Fly activo (" + Settings.P(Settings.KeyFly) + ")");
                 if (nf != _flying) ToggleFly();
                 _y += LH + 2;
                 Slider("Velocidad fly", Settings.FlySpeed, 1, 200);
                 Slider("Velocidad fly rapida", Settings.FlyFastSpeed, 1, 500);
                 _y += 6;
-                GUI.Label(new Rect(X, _y, W, LH), "Voltereta (" + Settings.KeyFlip.Value + ")"); _y += LH;
+                GUI.Label(new Rect(X, _y, W, LH), "Voltereta (" + Settings.P(Settings.KeyFlip) + ")"); _y += LH;
                 Settings.FlipBackwards.Value = GUI.Toggle(new Rect(X, _y, W, LH), Settings.FlipBackwards.Value, " Hacia atras (back flip)"); _y += LH + 2;
                 Slider("Velocidad de giro", Settings.FlipSpin, 1, 40);
                 Slider("Salto", Settings.FlipHop, 0, 50);
@@ -457,7 +467,7 @@ namespace DutFly
                 Slider("Potencia del motor (x)", Settings.PowerMult, 0.5f, 50);
                 Slider("Velocidad maxima (x)", Settings.SpeedMult, 0.5f, 10);
                 Slider("Traccion / agarre (x)", Settings.GripMult, 0.2f, 20);
-                Slider("Boost (" + Settings.KeyBoost.Value + ", m/s2)", Settings.BoostAccel, 0, 300);
+                Slider("Boost (" + Settings.P(Settings.KeyBoost) + ", m/s2)", Settings.BoostAccel, 0, 300);
                 Settings.NoLimiters.Value = GUI.Toggle(new Rect(X, _y, W, LH), Settings.NoLimiters.Value, " Quitar limitadores de velocidad del juego"); _y += LH + 4;
                 GUI.Label(new Rect(X, _y, W, LH * 2), "Escribe en la caja para pasar del maximo del slider."); _y += LH * 2;
                 if (GUI.Button(new Rect(X, _y, W, LH), "Restaurar coche original (x1)"))
@@ -472,7 +482,7 @@ namespace DutFly
                 foreach (var (label, entry) in Settings.Binds)
                 {
                     GUI.Label(new Rect(X, _y, 170, LH), label);
-                    string txt = _listening == entry ? "pulsa una tecla... (Esc)" : entry.Value;
+                    string txt = _listening == entry ? "pulsa una tecla... (Esc)" : Settings.P(entry);
                     if (GUI.Button(new Rect(X + 175, _y, W - 175, LH), txt)) _listening = entry;
                     _y += LH + 4;
                 }
