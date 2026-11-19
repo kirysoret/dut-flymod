@@ -1,6 +1,6 @@
-version=0.2.4.1
-notas=Fix: el truco aereo sube a la altura exacta, gira arriba y cae (ya no sale volando)
-mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/c1731e43874546d18d040af257aa45cc70ab0d25/FlyMod.dll
-mod_sha256=656629848C5554E7C44CAFAC6AFCABE4D338C3691E1A27AD0B3D1436EEC70445
-instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/c1731e43874546d18d040af257aa45cc70ab0d25/FlyModInstaller.exe
-instalador_sha256=9F3E7003960DA80A773B64B221BC96E8DB353005619A59480359CB3B26E13BE1
+version=0.2.5.0
+notas=Modo arana (J), color RGB, auto cubo, tiempo estimado en Flip y tiempos en min/h/d
+mod=https://raw.githubusercontent.com/kirysoret/dut-flymod/87093e947bb342e4eda6dcc6b53edcb660a6d97f/FlyMod.dll
+mod_sha256=F53462E95F6B24771392A2495B6F52DD755AB9E5C79DB3B25F1A68A6A1DE8605
+instalador=https://raw.githubusercontent.com/kirysoret/dut-flymod/87093e947bb342e4eda6dcc6b53edcb660a6d97f/FlyModInstaller.exe
+instalador_sha256=5B3A10AA92BF2B9DD7577360357E775381CF6EC1A7B54FB4E59D8E6817785860
