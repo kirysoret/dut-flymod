@@ -1,4 +1,4 @@
-# FlyMod — Drive Up Together
+# FlyMod 0.2 Beta — Drive Up Together
 
 Mod de BepInEx 6 (IL2CPP) con menú en el juego.
 

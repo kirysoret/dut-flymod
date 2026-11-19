@@ -14,7 +14,7 @@ using System.Collections.Generic;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("FlyMod Installer")]
-[assembly: System.Reflection.AssemblyVersion("2.0.1.0")]
+[assembly: System.Reflection.AssemblyVersion("0.2.0.0")]
 
 namespace FlyModInstaller
 {
@@ -25,6 +25,7 @@ namespace FlyModInstaller
         public const string UpdateUrlRaw = "https://raw.githubusercontent.com/kirysoret/dut-flymod/main/version.txt";
         public const string ExeName = "Drive Up Together.exe";
         public const string ProcName = "Drive Up Together";
+        public const string Canal = "Beta";
 
         [STAThread]
         static void Main(string[] args)
@@ -50,7 +51,7 @@ namespace FlyModInstaller
 
         public MainForm(string[] args)
         {
-            Text = "FlyMod - Drive Up Together";
+            Text = "FlyMod " + App.Canal + " - Drive Up Together";
             ClientSize = new Size(520, 400);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
@@ -66,7 +67,7 @@ namespace FlyModInstaller
 
             var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12) };
             var title = new Label { Text = "FlyMod", Font = new Font("Segoe UI", 16f, FontStyle.Bold), Location = new Point(12, 8), AutoSize = true };
-            _ver = new Label { Text = "Version: " + LocalVersion(), Location = new Point(14, 44), AutoSize = true, ForeColor = Color.DimGray };
+            _ver = new Label { Text = "Version: " + LocalVersion() + " " + App.Canal, Location = new Point(14, 44), AutoSize = true, ForeColor = Color.DimGray };
 
             var lblPath = new Label { Text = "Carpeta del juego:", Location = new Point(14, 72), AutoSize = true };
             _path = new TextBox { Location = new Point(14, 92), Size = new Size(400, 23), Text = FindGameDir() ?? "" };
@@ -224,7 +225,7 @@ namespace FlyModInstaller
                 if (new Version(rv) > new Version(LocalVersion()))
                 {
                     string notas; _remote.TryGetValue("notas", out notas);
-                    _bannerText.Text = "NEW VERSION " + rv + " disponible" + (string.IsNullOrEmpty(notas) ? "" : "  -  " + notas);
+                    _bannerText.Text = "NEW VERSION " + rv + " " + App.Canal + " disponible" + (string.IsNullOrEmpty(notas) ? "" : "  -  " + notas);
                     _banner.Visible = true;
                     Log("Hay una version nueva: " + rv + " (tienes " + LocalVersion() + ").");
                 }
@@ -285,7 +286,7 @@ namespace FlyModInstaller
                 }
             }
 
-            Invoke(new Action(() => { _banner.Visible = false; _ver.Text = "Version: " + v; }));
+            Invoke(new Action(() => { _banner.Visible = false; _ver.Text = "Version: " + v + " " + App.Canal; }));
             Log("Actualizado a " + v + ".");
         }
 

@@ -1,4 +1,4 @@
-// FlyMod v2 para Drive Up Together (BepInEx 6 IL2CPP).
+// FlyMod 0.2 Beta para Drive Up Together (BepInEx 6 IL2CPP).
 // Menu movible (Insert por defecto): fly, front flip, boost, potencia, velocidad maxima, traccion y teclas.
 // En cuanto se usa cualquier truco, se bloquean hasta cerrar el juego: subida al leaderboard,
 // logros/estadisticas de Steam, recompensas de altura y monedas.
@@ -19,7 +19,7 @@ using NWH.WheelController3D;
 
 namespace DutFly
 {
-    [BepInPlugin("local.dut.flymod", "FlyMod", "2.0.1")]
+    [BepInPlugin("local.dut.flymod", "FlyMod", "0.2.0")]
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource L;
@@ -59,7 +59,7 @@ namespace DutFly
             PatchAll(h, typeof(Caporta.DriveUpTogether.Gameplay.Surfaces.VehicleLaunchGuard), unlimited, "FixedUpdate");
             PatchAll(h, typeof(Caporta.DriveUpTogether.VehicleSpeedGovernor), unlimited, "Limit");
 
-            L.LogInfo($"FlyMod 2 cargado. {Settings.P(Settings.KeyMenu)} = menu.");
+            L.LogInfo($"FlyMod 0.2 Beta cargado. {Settings.P(Settings.KeyMenu)} = menu.");
         }
 
         static HarmonyMethod Prefix(string name) =>
@@ -108,7 +108,7 @@ namespace DutFly
     {
         public static ConfigEntry<float> FlySpeed, FlyFastSpeed;
         public static ConfigEntry<float> FlipSpin, FlipHop, FlipTurns;
-        public static ConfigEntry<bool> FlipBackwards;
+        public static ConfigEntry<bool> FlipBackwards, FlipGroundOnly;
         public static ConfigEntry<float> BoostAccel;
         public static ConfigEntry<float> PowerMult, SpeedMult, GripMult;
         public static ConfigEntry<bool> NoLimiters;
@@ -125,6 +125,7 @@ namespace DutFly
             FlipHop = c.Bind("Flip", "Salto", 8f, "Impulso hacia arriba al empezar la voltereta (m/s)");
             FlipTurns = c.Bind("Flip", "Vueltas", 1f, "Numero de vueltas completas");
             FlipBackwards = c.Bind("Flip", "HaciaAtras", false, "Back flip en vez de front flip");
+            FlipGroundOnly = c.Bind("Flip", "SoloDesdeSuelo", true, "Solo permitir la voltereta con el coche en el suelo (evita subir spameando)");
             BoostAccel = c.Bind("Coche", "Boost", 60f, "Aceleracion extra mientras mantienes la tecla de boost (m/s2)");
             PowerMult = c.Bind("Coche", "Potencia", 1f, "Multiplicador de potencia del motor");
             SpeedMult = c.Bind("Coche", "VelocidadMax", 1f, "Multiplicador de velocidad maxima (relacion final)");
@@ -278,14 +279,33 @@ namespace DutFly
 
         void StartFlip()
         {
-            if (_flying) return;
+            if (_flying || _flipLeft > 0) return;            // no encadenar volteretas en el aire
             _rb = FindLocalBody();
             if (_rb == null) return;
+            if (Settings.FlipGroundOnly.Value && !IsGrounded(_rb)) return;
             float spin = Mathf.Max(0.5f, Settings.FlipSpin.Value);
             _flipLeft = Mathf.Max(0.1f, Settings.FlipTurns.Value) * 2f * Mathf.PI / spin;
             _flipAxisLocal = Settings.FlipBackwards.Value ? Vector3.left : Vector3.right;
-            _rb.linearVelocity += Vector3.up * Settings.FlipHop.Value;
+            // fija la velocidad vertical (no la suma) para que no se acumule altura
+            var v = _rb.linearVelocity;
+            v.y = Mathf.Max(v.y, Settings.FlipHop.Value);
+            _rb.linearVelocity = v;
             Plugin.MarkUsed("flip");
+        }
+
+        // suelo a menos de ~2.5 m bajo el coche (ignora los colliders del propio coche)
+        static bool IsGrounded(Rigidbody rb)
+        {
+            var hits = Physics.RaycastAll(rb.worldCenterOfMass, Vector3.down, 2.5f, ~0, QueryTriggerInteraction.Ignore);
+            if (hits == null) return false;
+            foreach (var h in hits)
+            {
+                var col = h.collider;
+                if (col == null) continue;
+                if (col.attachedRigidbody != null && col.attachedRigidbody.Pointer == rb.Pointer) continue;
+                return true;
+            }
+            return false;
         }
 
         void FixedUpdate()
@@ -431,7 +451,7 @@ namespace DutFly
             if (boosting && !Plugin.UsedThisSession) GUI.Label(new Rect(10, 10, 200, 25), "BOOST");
             if (Plugin.UsedThisSession)
                 GUI.Label(new Rect(10, 10, 600, 25), (status != null ? status + "  |  " : "") + "Leaderboard/logros bloqueados (reinicia el juego para jugar legal)");
-            if (_menuOpen) _win = GUI.Window(73195, _win, _winFn, "FlyMod  (" + Settings.P(Settings.KeyMenu) + " cerrar)");
+            if (_menuOpen) _win = GUI.Window(73195, _win, _winFn, "FlyMod 0.2 Beta  (" + Settings.P(Settings.KeyMenu) + " cerrar)");
         }
 
         float _y;
@@ -456,6 +476,7 @@ namespace DutFly
                 _y += 6;
                 GUI.Label(new Rect(X, _y, W, LH), "Voltereta (" + Settings.P(Settings.KeyFlip) + ")"); _y += LH;
                 Settings.FlipBackwards.Value = GUI.Toggle(new Rect(X, _y, W, LH), Settings.FlipBackwards.Value, " Hacia atras (back flip)"); _y += LH + 2;
+                Settings.FlipGroundOnly.Value = GUI.Toggle(new Rect(X, _y, W, LH), Settings.FlipGroundOnly.Value, " Solo desde el suelo"); _y += LH + 2;
                 Slider("Velocidad de giro", Settings.FlipSpin, 1, 40);
                 Slider("Salto", Settings.FlipHop, 0, 50);
                 Slider("Vueltas", Settings.FlipTurns, 0.5f, 10);
