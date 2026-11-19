@@ -22,6 +22,7 @@ namespace FlyModInstaller
     {
         // API de GitHub (sin cache de CDN); la pagina raw muestra el mismo archivo
         public const string UpdateUrl = "https://api.github.com/repos/kirysoret/dut-flymod/contents/version.txt?ref=main";
+        public const string UpdateUrlRaw = "https://raw.githubusercontent.com/kirysoret/dut-flymod/main/version.txt";
         public const string ExeName = "Drive Up Together.exe";
         public const string ProcName = "Drive Up Together";
 
@@ -212,7 +213,11 @@ namespace FlyModInstaller
             Log("Buscando actualizaciones...");
             try
             {
-                string txt = await Task.Run(() => Web().DownloadString(App.UpdateUrl));
+                string txt = await Task.Run(() =>
+                {
+                    try { return Web().DownloadString(App.UpdateUrl); }          // sin cache, limite 60/h por IP
+                    catch { return Web().DownloadString(App.UpdateUrlRaw); }    // respaldo (cache de hasta 5 min)
+                });
                 _remote = ParseKv(txt);
                 string rv;
                 if (!_remote.TryGetValue("version", out rv)) { Log("version.txt remoto invalido."); return; }
